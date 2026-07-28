@@ -101,6 +101,7 @@ function startProgressPolling() {
 }
 
 function createWindow() {
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -108,6 +109,7 @@ function createWindow() {
     minHeight: 640,
     title: 'Vulnerable Library Scanner',
     backgroundColor: '#0b1220',
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
