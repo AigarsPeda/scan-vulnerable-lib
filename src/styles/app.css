@@ -19,8 +19,8 @@
   --radius: 14px;
   --radius-sm: 10px;
   --radius-pill: 999px;
-  --font: "Manrope", "Segoe UI Variable", "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", "Consolas", "Cascadia Mono", monospace;
+  --font: "Segoe UI Variable", "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: "Cascadia Mono", "Consolas", "SF Mono", ui-monospace, monospace;
   --shadow: 0 0 0 1px var(--line);
 }
 

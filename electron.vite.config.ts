@@ -1,6 +1,18 @@
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import type { Plugin } from 'vite'
+
+/** file:// + crossorigin breaks module loading on Windows packaged builds. */
+function stripCrossOrigin(): Plugin {
+  return {
+    name: 'strip-crossorigin',
+    enforce: 'post',
+    transformIndexHtml(html: string) {
+      return html.replace(/\s+crossorigin(="[^"]*")?/g, '')
+    },
+  }
+}
 
 export default defineConfig({
   main: {
@@ -24,6 +36,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src'),
+    base: './',
     build: {
       rollupOptions: {
         input: {
@@ -31,6 +44,6 @@ export default defineConfig({
         },
       },
     },
-    plugins: [react()],
+    plugins: [react(), stripCrossOrigin()],
   },
 })

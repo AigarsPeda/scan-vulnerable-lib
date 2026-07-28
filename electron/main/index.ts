@@ -198,6 +198,7 @@ function createWindow(): void {
     minHeight: 640,
     title: 'Vulnerable Library Scanner',
     backgroundColor: '#0b0b0b',
+    show: false,
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -207,15 +208,35 @@ function createWindow(): void {
     },
   })
 
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+  })
+
+  // If the renderer fails to paint (common on some Windows GPU drivers), still show.
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show()
+    }
+  }, 2500)
+
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    pushLog('error', `Window failed to load (${code}): ${desc} [${url}]`)
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+}
+
+// Windows packaged builds can hit GPU compositor black screens; prefer software.
+if (process.platform === 'win32') {
+  app.disableHardwareAcceleration()
 }
 
 app.whenReady().then(() => {

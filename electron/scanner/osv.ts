@@ -7,16 +7,18 @@ type OsvVuln = {
   summary?: string
   aliases?: string[]
   related?: string[]
-  severity?: unknown
+  severity?: { type?: string; score?: string }[] | unknown
   database_specific?: { severity?: string }
 }
 
 const OSV_QUERY = 'https://api.osv.dev/v1/query'
 const OSV_BATCH = 'https://api.osv.dev/v1/querybatch'
+const OSV_VULN = 'https://api.osv.dev/v1/vulns'
 const BATCH_SIZE = 80
 
 export class OsvClient {
   private cache = new Map<string, OsvVuln[] | null>()
+  private vulnCache = new Map<string, OsvVuln>()
   private queue: OsvQueueItem[] = []
   private degraded = false
   skip: boolean
@@ -44,7 +46,6 @@ export class OsvClient {
     if (this.skip || !this.queue.length) return
     const items = this.queue.splice(0, this.queue.length)
 
-    // Resolve via cache / batch
     const pending: { item: OsvQueueItem; key: string }[] = []
     for (const item of items) {
       const key = `${item.osvEco}|${item.package}|${item.version}`.toLowerCase()
@@ -60,12 +61,14 @@ export class OsvClient {
     for (let i = 0; i < pending.length; i += BATCH_SIZE) {
       const chunk = pending.slice(i, i + BATCH_SIZE)
       this.stats.batchCalls++
-      const results = await this.queryBatch(
+      let results = await this.queryBatch(
         chunk.map((c) => ({
           package: { name: c.item.package, ecosystem: c.item.osvEco },
           version: c.item.version,
         }))
       )
+      // querybatch returns id-only stubs — hydrate for severity/summary
+      results = await Promise.all(results.map((vulns) => this.hydrateVulns(vulns)))
       for (let j = 0; j < chunk.length; j++) {
         const vulns = results[j] || []
         this.cache.set(chunk[j].key, vulns)
@@ -95,6 +98,40 @@ export class OsvClient {
     })
   }
 
+  /** querybatch only returns {id, modified} — fetch full vuln records. */
+  private async hydrateVulns(stubs: OsvVuln[]): Promise<OsvVuln[]> {
+    const ids = stubs.map((s) => s?.id).filter(Boolean) as string[]
+    const missing = [...new Set(ids.filter((id) => !this.vulnCache.has(id)))]
+    const concurrency = 8
+    for (let i = 0; i < missing.length; i += concurrency) {
+      const slice = missing.slice(i, i + concurrency)
+      await Promise.all(
+        slice.map(async (id) => {
+          const full = await this.fetchVulnById(id)
+          if (full) this.vulnCache.set(id, full)
+        })
+      )
+    }
+    return stubs.map((stub) => {
+      if (!stub?.id) return stub
+      return this.vulnCache.get(stub.id) || stub
+    })
+  }
+
+  private async fetchVulnById(id: string): Promise<OsvVuln | null> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(`${OSV_VULN}/${encodeURIComponent(id)}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return (await res.json()) as OsvVuln
+      } catch {
+        if (attempt === 3) return null
+        await new Promise((r) => setTimeout(r, 200 * attempt))
+      }
+    }
+    return null
+  }
+
   private async queryBatch(
     queries: { package: { name: string; ecosystem: string }; version: string }[]
   ): Promise<OsvVuln[][]> {
@@ -115,7 +152,6 @@ export class OsvClient {
             this.degraded = true
             emitLog('warn', `OSV API degraded: ${String(err)}`, this.gui)
           }
-          // fallback to single queries
           const out: OsvVuln[][] = []
           for (const q of queries) {
             out.push(await this.queryOne(q.package.name, q.package.ecosystem, q.version))
@@ -160,11 +196,15 @@ function getOsvSeverity(vulns: OsvVuln[]): string {
   let n = 0
   for (const v of vulns) {
     let s = 'unknown'
-    if (v.database_specific?.severity) {
-      s = String(v.database_specific.severity).toLowerCase()
+    const dbSev = v.database_specific?.severity
+    if (dbSev) {
+      s = String(dbSev).toLowerCase()
+    } else if (Array.isArray(v.severity) && v.severity.length) {
+      s = severityFromCvssList(v.severity)
     } else if (v.severity) {
       s = 'medium'
     }
+    if (s === 'moderate') s = 'medium'
     const r = rank[s] || 0
     if (r > n) {
       n = r
@@ -172,4 +212,35 @@ function getOsvSeverity(vulns: OsvVuln[]): string {
     }
   }
   return best
+}
+
+function severityFromCvssList(
+  list: { type?: string; score?: string }[]
+): string {
+  let bestScore = -1
+  for (const item of list) {
+    const raw = String(item.score || '')
+    // Numeric score: "7.5" or embedded in some payloads
+    const numeric = raw.match(/^(\d+(?:\.\d+)?)$/)
+    if (numeric) {
+      bestScore = Math.max(bestScore, Number(numeric[1]))
+      continue
+    }
+    // CVSS vector — map attack/impact heuristically via known base scores when present
+    // e.g. some records include "CVSS:3.1/AV:N/.../SC:N" without numeric; use vector hints
+    if (/AV:N.*AC:L.*PR:N/i.test(raw) && /C:H|I:H|A:H/i.test(raw)) {
+      bestScore = Math.max(bestScore, 9.0)
+    } else if (/C:H|I:H|A:H/i.test(raw)) {
+      bestScore = Math.max(bestScore, 7.5)
+    } else if (/C:L|I:L|A:L/i.test(raw)) {
+      bestScore = Math.max(bestScore, 4.0)
+    } else if (raw.includes('CVSS')) {
+      bestScore = Math.max(bestScore, 5.0)
+    }
+  }
+  if (bestScore < 0) return 'medium'
+  if (bestScore >= 9) return 'critical'
+  if (bestScore >= 7) return 'high'
+  if (bestScore >= 4) return 'medium'
+  return 'low'
 }

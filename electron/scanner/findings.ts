@@ -29,7 +29,8 @@ export class FindingsStore {
   }
 
   add(partial: Omit<Finding, 'HasFix' | 'IsCache'> & { HasFix?: boolean; IsCache?: boolean }): void {
-    const sev = (partial.Severity || 'unknown').toLowerCase()
+    const sevRaw = (partial.Severity || 'unknown').toLowerCase()
+    const sev = sevRaw === 'moderate' ? 'medium' : sevRaw
     if (this.highOnly && sev !== 'high' && sev !== 'critical') return
 
     const titleClean = sanitize(partial.Title)
