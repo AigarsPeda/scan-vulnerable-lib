@@ -108,7 +108,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'Vulnerable Library Scanner',
-    backgroundColor: '#0b1220',
+    backgroundColor: '#0b0b0b',
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
