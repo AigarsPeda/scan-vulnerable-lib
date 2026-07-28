@@ -38,6 +38,54 @@ export type NativeResult = {
   timedOut: boolean
 }
 
+function quoteWin(s: string): string {
+  if (!/[\s"]/g.test(s)) return s
+  return `"${s.replace(/"/g, '\\"')}"`
+}
+
+function resolveNodeExe(): string {
+  const fromPath = which('node')
+  if (fromPath) return fromPath
+  // Packaged scanner runs under ELECTRON_RUN_AS_NODE — electron.exe can execute JS.
+  return process.execPath
+}
+
+/** Prefer `node npm-cli.js` over `npm.cmd` so Windows paths with spaces work without cmd quoting bugs. */
+function resolveJsCli(command: string): { exe: string; script: string } | null {
+  const base = path.basename(command).toLowerCase()
+  const dir = path.dirname(command)
+  const pf = process.env.ProgramFiles || 'C:\\Program Files'
+  if (base === 'npm.cmd' || base === 'npm') {
+    const candidates = [
+      path.join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      path.join(pf, 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    ]
+    for (const script of candidates) {
+      if (fs.existsSync(script)) return { exe: resolveNodeExe(), script }
+    }
+  }
+  if (base === 'npx.cmd' || base === 'npx') {
+    const candidates = [
+      path.join(dir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+      path.join(pf, 'nodejs', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    ]
+    for (const script of candidates) {
+      if (fs.existsSync(script)) return { exe: resolveNodeExe(), script }
+    }
+  }
+  if (base === 'yarn.cmd' || base === 'yarn') {
+    const candidates = [
+      path.join(dir, 'yarn.js'),
+      path.join(dir, 'yarn.cjs'),
+      path.join(dir, 'lib', 'cli.js'),
+    ]
+    for (const script of candidates) {
+      if (fs.existsSync(script)) return { exe: resolveNodeExe(), script }
+    }
+  }
+  return null
+}
+
 export function runNative(
   command: string,
   args: string[],
@@ -52,17 +100,37 @@ export function runNative(
 
   if (process.platform === 'win32') {
     const lower = command.toLowerCase()
-    if (lower.endsWith('.cmd') || lower.endsWith('.bat') || /(^|[\\/])(npm|yarn|npx)(\.cmd)?$/i.test(command)) {
-      file = process.env.ComSpec || 'cmd.exe'
-      spawnArgs = ['/d', '/s', '/c', `"${command}" ${args.map(quoteWin).join(' ')}`]
-      shell = false
+    const needsCmdShell =
+      lower.endsWith('.cmd') ||
+      lower.endsWith('.bat') ||
+      /(^|[\\/])(npm|yarn|npx)(\.cmd)?$/i.test(command)
+
+    if (needsCmdShell) {
+      const jsCli = resolveJsCli(command)
+      if (jsCli) {
+        // Bypass .cmd entirely — no Program Files quoting issues.
+        file = jsCli.exe
+        spawnArgs = [jsCli.script, ...args]
+        shell = false
+      } else {
+        // Single command-line string with quotes — spawn(file, args, {shell:true})
+        // does NOT quote paths that contain spaces.
+        file = `${quoteWin(command)} ${args.map(quoteWin).join(' ')}`
+        spawnArgs = []
+        shell = true
+      }
     }
   }
 
   return new Promise((resolve) => {
     const child = spawn(file, spawnArgs, {
       cwd,
-      env: { ...process.env, ...opts.env },
+      env: {
+        ...process.env,
+        ...opts.env,
+        // When electron.exe is used as node, keep node-mode for child scripts.
+        ...(file === process.execPath ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
       windowsHide: true,
       shell,
     })
@@ -93,11 +161,6 @@ export function runNative(
       resolve({ code: timedOut ? 124 : code ?? 1, stdout, stderr, timedOut })
     })
   })
-}
-
-function quoteWin(s: string): string {
-  if (!/[\s"]/g.test(s)) return s
-  return `"${s.replace(/"/g, '\\"')}"`
 }
 
 export function toolExtras(): Record<string, string[]> {

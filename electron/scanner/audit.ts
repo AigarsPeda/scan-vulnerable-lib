@@ -94,19 +94,25 @@ async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): P
   const npm = resolveTool('npm')
   const yarn = resolveTool('yarn')
   const hasYarnLock = fs.existsSync(path.join(dir, 'yarn.lock'))
-  let nativeRan = false
+  let nativeOk = false
 
   if (npm) {
     const res = await runNative(npm, ['audit', '--json', '--omit=dev'], { cwd: dir })
-    nativeRan = true
-    parseNpmAudit(res.stdout, dir, findings, 'npm-audit')
+    if (isNpmAuditJson(res.stdout)) {
+      nativeOk = true
+      parseNpmAudit(res.stdout, dir, findings, 'npm-audit')
+    }
   } else if (yarn && hasYarnLock) {
     const res = await runNative(yarn, ['audit', '--json'], { cwd: dir })
-    nativeRan = true
-    parseYarnAudit(res.stdout, dir, findings)
+    if (res.stdout.trim()) {
+      nativeOk = true
+      parseYarnAudit(res.stdout, dir, findings)
+    }
   }
 
-  if (!nativeRan) {
+  // Only fall back when npm/yarn did not return a usable audit (common on Windows
+  // when .cmd spawning fails). Do not OSV-flood after a successful empty audit.
+  if (!nativeOk) {
     const pkgPath = path.join(dir, 'package.json')
     const pkg = readJson<{
       dependencies?: Record<string, string>
@@ -121,6 +127,19 @@ async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): P
         if (/^\d/.test(cleaned)) osv.enqueue('npm', 'npm', name, cleaned, dir, 'package.json')
       }
     }
+  }
+}
+
+function isNpmAuditJson(stdout: string): boolean {
+  try {
+    const audit = JSON.parse(stdout) as {
+      vulnerabilities?: unknown
+      advisories?: unknown
+      error?: unknown
+    }
+    return Boolean(audit && (audit.vulnerabilities || audit.advisories || audit.error))
+  } catch {
+    return false
   }
 }
 
@@ -216,31 +235,34 @@ function parseYarnAudit(stdout: string, dir: string, findings: FindingsStore): v
 
 async function auditNuget(dir: string, findings: FindingsStore, osv: OsvClient): Promise<void> {
   const dotnet = resolveTool('dotnet')
-  let nativeRan = false
+  let nativeOk = false
   if (dotnet) {
     const res = await runNative(
       dotnet,
       ['list', 'package', '--vulnerable', '--include-transitive'],
       { cwd: dir }
     )
-    nativeRan = true
-    for (const line of res.stdout.split(/\r?\n/)) {
-      const m = line.match(/^\s*>\s*(\S+)\s+(\S+)/)
-      if (!m) continue
-      findings.add({
-        Ecosystem: 'nuget',
-        Source: 'dotnet-list-vulnerable',
-        Severity: 'high',
-        Package: m[1],
-        Version: m[2],
-        Title: 'Vulnerable NuGet package reported by dotnet',
-        Advisory: '',
-        Path: dir,
-        Fix: 'Upgrade to a non-vulnerable version',
-      })
+    // Treat any successful stdout as a usable native result (may legitimately be empty).
+    if (res.code === 0 || res.stdout.trim().length > 0) {
+      nativeOk = true
+      for (const line of res.stdout.split(/\r?\n/)) {
+        const m = line.match(/^\s*>\s*(\S+)\s+(\S+)/)
+        if (!m) continue
+        findings.add({
+          Ecosystem: 'nuget',
+          Source: 'dotnet-list-vulnerable',
+          Severity: 'high',
+          Package: m[1],
+          Version: m[2],
+          Title: 'Vulnerable NuGet package reported by dotnet',
+          Advisory: '',
+          Path: dir,
+          Fix: 'Upgrade to a non-vulnerable version',
+        })
+      }
     }
   }
-  if (!nativeRan) {
+  if (!nativeOk) {
     for (const file of listFiles(dir, ['.csproj', '.fsproj', '.vbproj', 'packages.config'])) {
       if (file.endsWith('packages.config')) {
         const text = readText(file)

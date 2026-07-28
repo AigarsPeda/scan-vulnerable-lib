@@ -15,9 +15,16 @@ export async function walkDetect(
   state: ProgressState
 ): Promise<Record<string, DetectedLang>> {
   const detected: Record<string, DetectedLang> = {}
-  const preferred = preferredRoots()
   const walkRoots: string[] = []
-  for (const p of preferred) if (!walkRoots.includes(p)) walkRoots.push(p)
+
+  // When the user picks a specific folder, scan only that folder.
+  // preferredRoots() is only a boost for full-drive / default scans.
+  const isDriveRoot = (p: string) =>
+    process.platform === 'win32' ? /^[A-Za-z]:\\?$/.test(p) : p === '/'
+  const fullDiskScan = roots.length === 0 || roots.every(isDriveRoot)
+  if (fullDiskScan) {
+    for (const p of preferredRoots()) if (!walkRoots.includes(p)) walkRoots.push(p)
+  }
   for (const r of roots) if (!walkRoots.includes(r)) walkRoots.push(r)
 
   const queue = [...walkRoots]
