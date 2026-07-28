@@ -1068,13 +1068,17 @@ button, input { font-family: inherit; }
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px 0 8px;
+  /* Top padding creates a gap above sticky headers where scrolled findings peek through */
+  padding: 0 0 8px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 .report-list > * {
   flex-shrink: 0;
+}
+.report-list > .report-group:first-child {
+  margin-top: 10px;
 }
 .report-empty-inline {
   margin: auto 0;
@@ -1086,16 +1090,32 @@ button, input { font-family: inherit; }
 .report-group {
   border: 1px solid var(--line);
   border-radius: 12px;
-  overflow: hidden;
+  /* overflow:hidden breaks position:sticky for the group title */
   background: rgba(255,255,255,0.02);
 }
 .report-group.cache {
   border-color: rgba(250,204,21,0.22);
 }
 .report-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 4;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
-  background: rgba(0,0,0,0.25);
+  border-radius: 11px 11px 0 0;
+  background: #121212;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.35);
+}
+.report-group-head::before {
+  /* Cover any subpixel bleed from the row above while stuck */
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -10px;
+  height: 10px;
+  background: var(--bg);
+  pointer-events: none;
 }
 .report-group-top {
   display: flex;
@@ -1128,6 +1148,9 @@ button, input { font-family: inherit; }
   color: var(--muted-2);
   word-break: break-all;
 }
+.report-group.cache .report-group-head {
+  background: #16140e;
+}
 .report-items {
   list-style: none;
   margin: 0;
@@ -1138,6 +1161,9 @@ button, input { font-family: inherit; }
   border-top: 1px solid rgba(255,255,255,0.04);
 }
 .report-items li:first-child { border-top: 0; }
+.report-items li:last-child {
+  border-radius: 0 0 11px 11px;
+}
 .issue-head {
   display: flex;
   flex-wrap: wrap;
