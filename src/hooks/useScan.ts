@@ -349,7 +349,6 @@ export function useScan() {
   )
 
   const startScan = useCallback(async () => {
-    setTab('scan')
     clearFindings()
     markActive(false)
     setPercent(1)
@@ -418,10 +417,65 @@ export function useScan() {
     else if (scanState === 'paused') await resumeScan()
   }, [pauseScan, resumeScan, scanState, startScan])
 
+  const optionsLocked = scanState === 'running' || scanState === 'paused'
+
+  const resetScanUiForOptions = useCallback(() => {
+    clearFindings()
+    setPercent(0)
+    setPhase('Ready')
+    setDetail('Configure options and start a scan.')
+    setStatusLabel('Idle')
+    setStatusTone('')
+    addEvent('warn', 'Scan progress cleared after options change')
+  }, [addEvent, clearFindings])
+
+  const tryChangeOption = useCallback(
+    (apply: () => void) => {
+      if (scanStateRef.current !== 'idle') return
+      const dirty =
+        findingCount > 0 ||
+        findings.length > 0 ||
+        reportFindings.length > 0 ||
+        percent > 0
+      if (dirty) {
+        const ok = window.confirm(
+          'Changing options will reset scan progress and findings. Continue?'
+        )
+        if (!ok) return
+        resetScanUiForOptions()
+      }
+      apply()
+    },
+    [findingCount, findings.length, percent, reportFindings.length, resetScanUiForOptions]
+  )
+
+  const setHighOnlySafe = useCallback(
+    (v: boolean) => tryChangeOption(() => setHighOnly(v)),
+    [tryChangeOption]
+  )
+  const setSkipCacheSafe = useCallback(
+    (v: boolean) => tryChangeOption(() => setSkipCache(v)),
+    [tryChangeOption]
+  )
+  const setSkipOsvSafe = useCallback(
+    (v: boolean) => tryChangeOption(() => setSkipOsv(v)),
+    [tryChangeOption]
+  )
+  const setMaxProjectsSafe = useCallback(
+    (v: number) => tryChangeOption(() => setMaxProjects(v)),
+    [tryChangeOption]
+  )
+  const setRootPathSafe = useCallback(
+    (v: string) => tryChangeOption(() => setRootPath(v)),
+    [tryChangeOption]
+  )
+
   const pickFolder = useCallback(async () => {
+    if (scanStateRef.current !== 'idle') return
     const folder = await window.scannerApi.pickFolder()
-    if (folder) setRootPath(folder)
-  }, [])
+    if (!folder) return
+    tryChangeOption(() => setRootPath(folder))
+  }, [tryChangeOption])
 
   const exportReport = useCallback(
     async (format: ExportFormat) => {
@@ -451,16 +505,17 @@ export function useScan() {
     reportFindings,
     findingCount,
     scriptMissing,
+    optionsLocked,
     highOnly,
-    setHighOnly,
+    setHighOnly: setHighOnlySafe,
     skipCache,
-    setSkipCache,
+    setSkipCache: setSkipCacheSafe,
     skipOsv,
-    setSkipOsv,
+    setSkipOsv: setSkipOsvSafe,
     maxProjects,
-    setMaxProjects,
+    setMaxProjects: setMaxProjectsSafe,
     rootPath,
-    setRootPath,
+    setRootPath: setRootPathSafe,
     onPrimaryClick,
     stopScan,
     pickFolder,

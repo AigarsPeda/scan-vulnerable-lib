@@ -1,4 +1,5 @@
 import type { ScanState } from '../shared/types'
+import { motion } from 'motion/react'
 
 interface SidebarProps {
   iconUrl: string
@@ -7,6 +8,7 @@ interface SidebarProps {
   statusTone: string
   tab: 'scan' | 'report'
   onSelectTab: (tab: 'scan' | 'report') => void
+  optionsLocked: boolean
   highOnly: boolean
   skipCache: boolean
   skipOsv: boolean
@@ -27,6 +29,7 @@ export function Sidebar(props: SidebarProps) {
     props.scanState === 'running' ? 'Pause' : props.scanState === 'paused' ? 'Resume' : 'Start'
   const primaryClass =
     props.scanState === 'running' ? 'btn warn' : 'btn primary'
+  const locked = props.optionsLocked
 
   return (
     <aside className="sidebar">
@@ -38,77 +41,111 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </div>
 
-      <div className={`status-pill ${props.statusTone}`.trim()}>{props.statusLabel}</div>
+      <div className={`status-pill ${props.statusTone}`.trim()}>
+        {(props.scanState === 'running' || props.scanState === 'paused') && (
+          <span
+            className={`status-dots${props.scanState === 'paused' ? ' paused' : ''}`}
+            aria-hidden="true"
+          >
+            <span /><span /><span />
+            <span /><span /><span />
+            <span /><span /><span />
+          </span>
+        )}
+        <span>{props.statusLabel}</span>
+      </div>
 
       <nav className="tabs" role="tablist">
-        <button
-          type="button"
-          className={`tab${props.tab === 'scan' ? ' active' : ''}`}
-          onClick={() => props.onSelectTab('scan')}
-        >
-          Progress
-        </button>
-        <button
-          type="button"
-          className={`tab${props.tab === 'report' ? ' active' : ''}`}
-          onClick={() => props.onSelectTab('report')}
-        >
-          Report
-        </button>
+        {(
+          [
+            ['scan', 'Progress'],
+            ['report', 'Report'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`tab${props.tab === id ? ' active' : ''}`}
+            onClick={() => props.onSelectTab(id)}
+          >
+            {props.tab === id && (
+              <motion.span
+                className="tab-indicator"
+                layoutId="sidebar-tab-indicator"
+                transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              />
+            )}
+            <span className="tab-label">{label}</span>
+          </button>
+        ))}
       </nav>
 
-      <section className="side-panel">
+      <section className={`side-panel${locked ? ' options-locked' : ''}`}>
         <h2>Options</h2>
         <div className="options-stack">
-          <label className="check">
+          <label className={`check${locked ? ' disabled' : ''}`}>
             <input
               type="checkbox"
               checked={props.highOnly}
+              disabled={locked}
               onChange={(e) => props.onHighOnly(e.target.checked)}
             />
             <span>High / Critical only</span>
           </label>
-          <label className="check">
+          <label className={`check${locked ? ' disabled' : ''}`}>
             <input
               type="checkbox"
               checked={props.skipCache}
+              disabled={locked}
               onChange={(e) => props.onSkipCache(e.target.checked)}
             />
             <span>Skip caches</span>
           </label>
-          <label className="check">
+          <label className={`check${locked ? ' disabled' : ''}`}>
             <input
               type="checkbox"
               checked={props.skipOsv}
+              disabled={locked}
               onChange={(e) => props.onSkipOsv(e.target.checked)}
             />
             <span>Skip OSV API</span>
           </label>
         </div>
-        <label className="field">
+        <label className={`field${locked ? ' disabled' : ''}`}>
           <span>Max projects / ecosystem</span>
           <input
             type="number"
             min={1}
             max={500}
             value={props.maxProjects}
+            disabled={locked}
             onChange={(e) => props.onMaxProjects(Number(e.target.value || 80))}
           />
         </label>
-        <label className="field">
+        <label className={`field${locked ? ' disabled' : ''}`}>
           <span>Optional root folder</span>
           <div className="path-row">
             <input
               type="text"
               placeholder="Leave empty for defaults"
               value={props.rootPath}
+              disabled={locked}
               onChange={(e) => props.onRootPath(e.target.value)}
             />
-            <button type="button" className="btn ghost icon-btn" onClick={props.onPickFolder} title="Browse">
+            <button
+              type="button"
+              className="btn ghost icon-btn"
+              disabled={locked}
+              onClick={props.onPickFolder}
+              title={locked ? 'Unavailable while scanning' : 'Browse'}
+            >
               …
             </button>
           </div>
         </label>
+        {locked && (
+          <p className="options-lock-note">Options are locked while a scan is running or paused.</p>
+        )}
       </section>
 
       <div className="side-actions">

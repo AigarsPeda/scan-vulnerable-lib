@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ExportFormat, ReportFinding, ScanState } from '../shared/types'
+import { ProjectDropdown } from './ProjectDropdown'
 
 interface ReportViewProps {
   findings: ReportFinding[]
@@ -33,6 +34,7 @@ export function ReportView(props: ReportViewProps) {
   const [kind, setKind] = useState<KindFilter>('all')
   const [sev, setSev] = useState<SevFilter>('all')
   const [query, setQuery] = useState('')
+  const [projectPath, setProjectPath] = useState('all')
 
   const counts = useMemo(() => {
     const c = { total: props.findings.length, critical: 0, high: 0, medium: 0, low: 0 }
@@ -45,6 +47,35 @@ export function ReportView(props: ReportViewProps) {
     return c
   }, [props.findings])
 
+  const projectOptions = useMemo(() => {
+    const map = new Map<string, { path: string; name: string; isCache: boolean; count: number }>()
+    for (const f of props.findings) {
+      const path = f.path || '(unknown)'
+      const existing = map.get(path)
+      if (existing) {
+        existing.count++
+        if (f.isCache) existing.isCache = true
+      } else {
+        map.set(path, {
+          path,
+          name: folderLabel(path),
+          isCache: f.isCache,
+          count: 1,
+        })
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.isCache !== b.isCache) return a.isCache ? 1 : -1
+      return a.name.localeCompare(b.name)
+    })
+  }, [props.findings])
+
+  // Drop stale selection if that project disappeared after a refresh
+  const selectedProject =
+    projectPath === 'all' || projectOptions.some((p) => p.path === projectPath)
+      ? projectPath
+      : 'all'
+
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
     const map = new Map<string, ReportFinding[]>()
@@ -52,6 +83,7 @@ export function ReportView(props: ReportViewProps) {
     for (const f of props.findings) {
       if (kind === 'project' && f.isCache) continue
       if (kind === 'cache' && !f.isCache) continue
+      if (selectedProject !== 'all' && (f.path || '(unknown)') !== selectedProject) continue
       if (sev !== 'all' && f.severity !== sev && !(sev === 'medium' && f.severity === 'moderate')) continue
       if (q) {
         const hay = `${f.packageName} ${f.version} ${f.title} ${f.path} ${f.advisory} ${f.ecosystem}`.toLowerCase()
@@ -69,10 +101,12 @@ export function ReportView(props: ReportViewProps) {
       isCache: items.some((i) => i.isCache),
       items,
     }))
-  }, [props.findings, kind, sev, query])
+  }, [props.findings, kind, sev, query, selectedProject])
 
   const visibleCount = groups.reduce((n, g) => n + g.items.length, 0)
   const live = props.scanState === 'running' || props.scanState === 'paused'
+  const canExport =
+    (props.findings.length > 0 || props.findingCount > 0) && props.scanState !== 'running'
 
   return (
     <section className="view">
@@ -93,6 +127,14 @@ export function ReportView(props: ReportViewProps) {
                 key={format}
                 type="button"
                 className="btn ghost small"
+                disabled={!canExport}
+                title={
+                  canExport
+                    ? `Export as ${LABELS[format]}`
+                    : props.scanState === 'running'
+                      ? 'Wait until the scan is paused or stopped'
+                      : 'Nothing to export yet'
+                }
                 onClick={() => props.onExport(format)}
               >
                 {LABELS[format]}
@@ -119,23 +161,38 @@ export function ReportView(props: ReportViewProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <div className="filter-pills">
-            {(
-              [
-                ['all', 'ALL'],
-                ['project', 'PROJECTS'],
-                ['cache', 'CACHES'],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={`filter-pill kind-${value}${kind === value ? ' active' : ''}`}
-                onClick={() => setKind(value)}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="filter-row">
+            <div className="filter-pills">
+              {(
+                [
+                  ['all', 'ALL'],
+                  ['project', 'PROJECTS'],
+                  ['cache', 'CACHES'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`filter-pill kind-${value}${kind === value ? ' active' : ''}`}
+                  onClick={() => {
+                    setKind(value)
+                    setProjectPath('all')
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <ProjectDropdown
+              value={selectedProject}
+              options={projectOptions.filter((p) => {
+                if (kind === 'project') return !p.isCache
+                if (kind === 'cache') return p.isCache
+                return true
+              })}
+              disabled={projectOptions.length === 0}
+              onChange={setProjectPath}
+            />
           </div>
           <div className="filter-pills">
             {(
@@ -164,7 +221,9 @@ export function ReportView(props: ReportViewProps) {
             <div className="report-empty-inline">
               {props.findingCount > 0 && props.findings.length === 0
                 ? 'No findings match these filters.'
-                : 'No findings yet. They appear here live while scanning.'}
+                : props.findings.length > 0
+                  ? 'No findings match these filters.'
+                  : 'No findings yet. They appear here live while scanning.'}
             </div>
           ) : (
             groups.map((group) => (
