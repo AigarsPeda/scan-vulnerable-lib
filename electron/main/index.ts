@@ -235,8 +235,10 @@ function createWindow(): void {
     }
   }, 2500)
 
-  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
-    if (level >= 2) appendBootLog(`console[${level}] ${message} (${sourceId}:${line})`)
+  mainWindow.webContents.on('console-message', ({ level, message, lineNumber, sourceId }) => {
+    if (level === 'warning' || level === 'error') {
+      appendBootLog(`console[${level}] ${message} (${sourceId}:${lineNumber})`)
+    }
   })
 
   mainWindow.webContents.on('did-finish-load', () => {
