@@ -813,7 +813,8 @@ button, input { font-family: inherit; }
   row-gap: 0;
   flex-shrink: 0;
   position: relative;
-  z-index: 3;
+  z-index: 40;
+  background: var(--bg);
 }
 .report-heading {
   display: flex;
@@ -884,7 +885,9 @@ button, input { font-family: inherit; }
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   position: relative;
-  z-index: 2;
+  /* Above sticky project headers in .report-list (dropdowns live here) */
+  z-index: 30;
+  background: var(--bg);
 }
 .report-search {
   width: 100%;
@@ -1099,7 +1102,7 @@ button, input { font-family: inherit; }
 .report-group-head {
   position: sticky;
   top: 0;
-  z-index: 4;
+  z-index: 1;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   border-radius: 11px 11px 0 0;
