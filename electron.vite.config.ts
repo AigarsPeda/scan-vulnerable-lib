@@ -8,6 +8,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'electron/main/index.ts'),
+          scanner: resolve(__dirname, 'electron/scanner/index.ts'),
         },
       },
     },

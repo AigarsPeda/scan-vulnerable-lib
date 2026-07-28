@@ -8,11 +8,13 @@ files:
   - out/**/*
   - package.json
 extraResources:
-  - from: scripts
-    to: scripts
   - from: assets
     to: assets
+  - from: out/main/scanner.js
+    to: scanner.js
 asar: true
+asarUnpack:
+  - '**/scanner.js'
 electronLanguages:
   - en
 win:

@@ -28,9 +28,8 @@ Modern machines often hold dozens of projects and language ecosystems. Checking 
 
 ### Runtime requirements
 
-- **Windows:** PowerShell 5.1+ (PowerShell 7 `pwsh` recommended for faster parallel audits)
-- **macOS:** [PowerShell 7](https://aka.ms/powershell) (`pwsh`)
-- Optional tools improve coverage: Node.js/`npm`, .NET SDK, `pip-audit`, `govulncheck`, `cargo audit`, Composer, etc.
+- **Windows / macOS:** just the app — the scanner runs on Electron’s built-in Node (no PowerShell install)
+- Optional tools improve coverage: Node.js/`npm`, .NET SDK, `pip-audit`, `govulncheck`, `cargo audit`, Composer, etc. Without them, OSV API fallback still works for many ecosystems.
 
 ---
 
@@ -41,7 +40,7 @@ Modern machines often hold dozens of projects and language ecosystems. Checking 
 - **Native Report tab** — filter by severity, project/cache, ecosystem, has-fix; Open / Copy path  
 - **Exports** — JSON, TXT, CSV, Markdown, HTML  
 - **Controls** — Start / Pause / Resume / Stop; options locked while scanning  
-- **Performance** — OSV cache + `/v1/querybatch`, skip redundant OSV after native audits, finding dedupe, command timeouts, capped parallel project audits on PowerShell 7+  
+- **Performance** — OSV cache + `/v1/querybatch`, skip redundant OSV after native audits, finding dedupe, command timeouts 
 
 ---
 
@@ -133,14 +132,15 @@ Not a replacement for enterprise SCA platforms — it is a practical desktop sca
 scan-vulnerable-lib/
   electron/main/       # Electron main process
   electron/preload/    # Secure preload bridge
+  electron/scanner/    # Node vulnerability scanner (Win + macOS)
   src/                 # React + TypeScript UI
-  scripts/             # PowerShell scanner (Windows + macOS)
+  scripts/             # Legacy PowerShell scanner (reference only)
   assets/              # App icons
   electron-builder.yml # Installer packaging
   release/             # Built installers (after npm run dist:*)
 ```
 
-The PowerShell scanner also runs standalone (Desktop output) without `-GuiMode`.
+The Node scanner is packaged inside the app and needs no extra runtime on Windows or macOS.
 
 ---
 

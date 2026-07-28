@@ -59,6 +59,26 @@ if (-not (Test-Path -LiteralPath $script:TempDir)) {
 $script:DevNull = if ($script:IsWin) { 'NUL' } else { '/dev/null' }
 $script:OsLabel = if ($script:IsMac) { 'macOS' } elseif ($script:IsWin) { 'Windows' } else { 'Unix' }
 
+# GUI apps (Electron) on macOS often miss Homebrew / tool PATH entries
+if ($script:IsMac) {
+  $pathParts = @($env:PATH -split ':' | Where-Object { $_ })
+  foreach ($extra in @(
+      '/opt/homebrew/bin',
+      '/opt/homebrew/sbin',
+      '/usr/local/bin',
+      '/usr/local/sbin',
+      (Join-Path $script:HomeDir '.dotnet/tools'),
+      (Join-Path $script:HomeDir '.cargo/bin'),
+      (Join-Path $script:HomeDir 'go/bin'),
+      '/usr/local/share/dotnet'
+    )) {
+    if ($extra -and (Test-Path -LiteralPath $extra) -and ($pathParts -notcontains $extra)) {
+      $pathParts = @($extra) + $pathParts
+    }
+  }
+  $env:PATH = ($pathParts -join ':')
+}
+
 if ($script:IsMac -and $PSVersionTable.PSVersion.Major -lt 6) {
   Write-Host 'On macOS this script needs PowerShell 7+.' -ForegroundColor Red
   Write-Host 'Install: https://aka.ms/powershell' -ForegroundColor Yellow
@@ -2082,14 +2102,14 @@ $dotnetCmd  = Get-Cmd 'dotnet' $dotnetExtra
 $pythonCmd  = Get-Cmd $(if ($script:IsMac) { 'python3' } else { 'python' }) $pythonExtra
 if (-not $pythonCmd) { $pythonCmd = Get-Cmd 'python3' $pythonExtra }
 if (-not $pythonCmd) { $pythonCmd = Get-Cmd 'python' $pythonExtra }
-$pipCmd     = Get-Cmd 'pip' @()
+$goCmd      = Get-Cmd 'go' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/go', '/usr/local/go/bin/go', (Join-Path $script:HomeDir 'go/bin/go')) })
+$govuln     = Get-Cmd 'govulncheck' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/govulncheck', (Join-Path $script:HomeDir 'go/bin/govulncheck')) })
+$cargoCmd   = Get-Cmd 'cargo' $(if ($script:IsWin) { @() } else { @((Join-Path $script:HomeDir '.cargo/bin/cargo'), '/opt/homebrew/bin/cargo') })
+$composer   = Get-Cmd 'composer' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/composer', '/usr/local/bin/composer') })
+$bundleCmd  = Get-Cmd 'bundle' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/bundle', '/usr/local/bin/bundle') })
+$pipCmd     = Get-Cmd 'pip' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/pip3', '/usr/local/bin/pip3', '/usr/bin/pip3') })
 if (-not $pipCmd) { $pipCmd = Get-Cmd 'pip3' @() }
-$pipAudit   = Get-Cmd 'pip-audit' @()
-$goCmd      = Get-Cmd 'go' @()
-$govuln     = Get-Cmd 'govulncheck' @()
-$cargoCmd   = Get-Cmd 'cargo' @()
-$composer   = Get-Cmd 'composer' @()
-$bundleCmd  = Get-Cmd 'bundle' @()
+$pipAudit   = Get-Cmd 'pip-audit' $(if ($script:IsWin) { @() } else { @('/opt/homebrew/bin/pip-audit', (Join-Path $script:HomeDir '.local/bin/pip-audit')) })
 
 Write-QuietLog "Tools: npm=$(!!$npmCmd) yarn=$(!!$yarnCmd) dotnet=$(!!$dotnetCmd) python=$(!!$pythonCmd) pip-audit=$(!!$pipAudit) go=$(!!$goCmd) govulncheck=$(!!$govuln) cargo=$(!!$cargoCmd) composer=$(!!$composer)"
 Show-LiveProgress 20 'Phase 3/4: Auditing libraries' 'Starting audits...'

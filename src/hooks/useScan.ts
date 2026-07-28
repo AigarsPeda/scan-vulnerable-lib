@@ -281,7 +281,7 @@ export function useScan() {
         if (cancelled) return
 
         setScriptMissing(!info.scriptExists)
-        if (!info.scriptExists) addEvent('error', 'Scanner script missing from app package.')
+        if (!info.scriptExists) addEvent('error', 'Scanner engine missing from app package. Rebuild the app.')
 
         if (runtime.running) {
           // Reconnect to a scan that is still running

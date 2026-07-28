@@ -69,31 +69,44 @@ function writeControlAction(action: string): void {
   fs.writeFileSync(getControlPath(), payload, 'utf8')
 }
 
-function getScannerScriptPath(): string {
-  return path.join(resourceRoot(), 'scripts', 'scan-vulnerable-libs.ps1')
-}
-
 function getAppIconPath(): string {
   return path.join(resourceRoot(), 'assets', 'icon.png')
 }
 
-function resolvePowerShell(): string {
-  if (process.platform === 'win32') {
-    const candidates = [
-      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe'),
-      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7-preview', 'pwsh.exe'),
-      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ]
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c
-    }
-    return 'powershell.exe'
+/** Built scanner entry (electron-vite main multi-entry → out/main/scanner.js). */
+function getScannerEntryPath(): string {
+  if (app.isPackaged) {
+    const fromResources = path.join(process.resourcesPath, 'scanner.js')
+    if (fs.existsSync(fromResources)) return fromResources
+    const unpacked = path.join(__dirname, 'scanner.js').replace('app.asar', 'app.asar.unpacked')
+    if (fs.existsSync(unpacked)) return unpacked
   }
-  const candidates = ['/opt/homebrew/bin/pwsh', '/usr/local/bin/pwsh', '/usr/bin/pwsh']
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c
+  return path.join(__dirname, 'scanner.js')
+}
+
+/** GUI apps on macOS inherit a minimal PATH — prepend common tool locations. */
+function buildScannerEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PYTHONUNBUFFERED: '1',
+    ELECTRON_RUN_AS_NODE: '1',
   }
-  return 'pwsh'
+  if (process.platform === 'win32') return env
+
+  const extras = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    path.join(os.homedir(), '.dotnet', 'tools'),
+    path.join(os.homedir(), '.cargo', 'bin'),
+    path.join(os.homedir(), 'go', 'bin'),
+    '/usr/local/share/dotnet',
+  ]
+  const current = (env.PATH || env.Path || '').split(path.delimiter).filter(Boolean)
+  const merged = [...extras.filter((p) => fs.existsSync(p) && !current.includes(p)), ...current]
+  env.PATH = merged.join(path.delimiter)
+  return env
 }
 
 function send(channel: string, payload: unknown): void {
@@ -231,7 +244,7 @@ app.on('before-quit', () => {
 })
 
 ipcMain.handle('get-app-info', async () => {
-  const scriptPath = getScannerScriptPath()
+  const scannerPath = getScannerEntryPath()
   const reportPath = getReportPath()
   return {
     platform: process.platform,
@@ -240,10 +253,10 @@ ipcMain.handle('get-app-info', async () => {
     dataDir: getDataDir(),
     reportPath,
     reportUrl: fs.existsSync(reportPath) ? pathToFileURL(reportPath).href : null,
-    scriptPath,
-    scriptExists: fs.existsSync(scriptPath),
+    scriptPath: scannerPath,
+    scriptExists: fs.existsSync(scannerPath),
     reportExists: fs.existsSync(reportPath),
-    powerShell: resolvePowerShell(),
+    powerShell: process.execPath,
     home: os.homedir(),
   }
 })
@@ -749,34 +762,23 @@ ipcMain.handle('start-scan', async (_event, options: ScanOptions = {}) => {
     return { ok: false, error: 'A scan is already running.' }
   }
 
-  const scriptPath = getScannerScriptPath()
-  if (!fs.existsSync(scriptPath)) {
-    return { ok: false, error: `Scanner script missing:\n${scriptPath}` }
+  const scannerPath = getScannerEntryPath()
+  if (!fs.existsSync(scannerPath)) {
+    return { ok: false, error: `Scanner missing:\n${scannerPath}\nRun npm run build first.` }
   }
 
   const dataDir = getDataDir()
-  const ps = resolvePowerShell()
-  const args = [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    scriptPath,
-    '-GuiMode',
-    '-NoOpen',
-    '-OutputDir',
-    dataDir,
-  ]
+  const args = [scannerPath, '--gui', '--no-open', '--output-dir', dataDir]
 
-  if (options.highOnly) args.push('-HighOnly')
-  if (options.skipCache) args.push('-SkipCache')
-  if (options.skipOsv) args.push('-SkipOsv')
+  if (options.highOnly) args.push('--high-only')
+  if (options.skipCache) args.push('--skip-cache')
+  if (options.skipOsv) args.push('--skip-osv')
   if (options.maxProjects) {
-    args.push('-MaxProjectsPerEco')
+    args.push('--max-projects')
     args.push(String(options.maxProjects))
   }
   if (options.driveOrPath) {
-    args.push('-Drive')
+    args.push('--drive')
     args.push(String(options.driveOrPath))
   }
 
@@ -793,7 +795,6 @@ ipcMain.handle('start-scan', async (_event, options: ScanOptions = {}) => {
       'utf8'
     )
     writeControlAction('run')
-    // Clear previous findings so the live Report starts empty
     fs.writeFileSync(
       getFindingsPath(),
       JSON.stringify({ generated: new Date().toISOString(), platform: '', count: 0, findings: [] }),
@@ -813,13 +814,10 @@ ipcMain.handle('start-scan', async (_event, options: ScanOptions = {}) => {
   startProgressPolling()
 
   try {
-    scanProcess = spawn(ps, args, {
-      cwd: path.dirname(scriptPath),
+    scanProcess = spawn(process.execPath, args, {
+      cwd: dataDir,
       windowsHide: true,
-      env: {
-        ...process.env,
-        PYTHONUNBUFFERED: '1',
-      },
+      env: buildScannerEnv(),
     })
   } catch (err) {
     scanProcess = null
@@ -888,5 +886,5 @@ ipcMain.handle('start-scan', async (_event, options: ScanOptions = {}) => {
     scanProcess = null
   })
 
-  return { ok: true, powerShell: ps, dataDir }
+  return { ok: true, dataDir }
 })
