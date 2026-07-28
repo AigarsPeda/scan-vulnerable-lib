@@ -1,6 +1,6 @@
 {
   "name": "scan-vulnerable-lib",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Desktop vulnerable library scanner for Windows and macOS. Find insecure npm, NuGet, PyPI, Go, and other dependencies with a live Electron GUI and OSV-backed checks.",
   "main": "./out/main/index.js",
   "author": "AigarsPeda",
