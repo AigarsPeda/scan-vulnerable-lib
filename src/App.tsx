@@ -66,6 +66,8 @@ export default function App() {
                 findings={scan.findings}
                 findingCount={scan.findingCount}
                 events={scan.events}
+                scanState={scan.scanState}
+                elapsedMs={scan.elapsedMs}
                 onClearEvents={scan.clearEvents}
               />
             ) : (

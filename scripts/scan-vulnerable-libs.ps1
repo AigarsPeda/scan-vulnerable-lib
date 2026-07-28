@@ -171,7 +171,7 @@ function Initialize-ProgressLine {
 function Write-GuiProgressFile {
   try {
     $obj = [ordered]@{
-      percent      = [int]$script:percent
+      percent      = [double]$script:percent
       phase        = [string]$script:phase
       detail       = [string]$script:detail
       report       = [string]$outHtml
@@ -231,7 +231,7 @@ function Wait-IfGuiPaused {
 
 function Show-LiveProgress {
   param(
-    [int]$Percent,
+    [double]$Percent,
     [string]$Status,
     [string]$Current
   )
@@ -249,7 +249,7 @@ function Show-LiveProgress {
 
   $script:phase = $Status
   $script:detail = $Current
-  $script:percent = [Math]::Min(99, [Math]::Max(0, $Percent))
+  $script:percent = [Math]::Min(99, [Math]::Max(0, [Math]::Round($Percent, 1)))
   $script:spinIdx = ($script:spinIdx + 1) % $script:spinChars.Count
   $spin = $script:spinChars[$script:spinIdx]
   $pct = $script:percent
@@ -265,7 +265,7 @@ function Show-LiveProgress {
     $width = Get-ConsoleWidth
     $maxLen = [Math]::Max(20, $width - 1)
     $shown = $Current
-    $prefix = (" {0} [{1,3}%] {2} | " -f $spin, $pct, $Status)
+    $prefix = (" {0} [{1,5:0.0}%] {2} | " -f $spin, $pct, $Status)
     $room = $maxLen - $prefix.Length
     if ($room -lt 10) { $room = 10 }
     if ($shown.Length -gt $room) {
@@ -1714,7 +1714,7 @@ while ($queue.Count -gt 0) {
   $foldersSeen++
 
   # Update the single progress line (throttled inside Show-LiveProgress)
-  $pct = 1 + [Math]::Min(13, [int](13 * [Math]::Log(1 + $foldersSeen) / [Math]::Log(1 + 5000)))
+  $pct = 1 + [Math]::Min(13, (13.0 * [Math]::Log(1 + $foldersSeen) / [Math]::Log(1 + 5000)))
   Show-LiveProgress -Percent $pct -Status 'Phase 1/4: Detecting languages' -Current ("folders=$foldersSeen projects=$manifestsFound now=$dir")
 
   # List files in this folder only (no deep recurse) so UI can update between folders
@@ -1856,7 +1856,7 @@ $ecoIndex = 0
 foreach ($eco in $ecoList) {
   $ecoIndex++
   $dirs = @($projects[$eco])
-  $basePct = 20 + [int](50 * ($ecoIndex - 1) / [Math]::Max(1, $ecoList.Count))
+  $basePct = 20 + (50.0 * ($ecoIndex - 1) / [Math]::Max(1, $ecoList.Count))
 
   Show-LiveProgress $basePct "Phase 3/4: Auditing $eco" "Projects: $($dirs.Count)"
 
@@ -1865,7 +1865,7 @@ foreach ($eco in $ecoList) {
     $di = 0
     foreach ($dir in $dirs) {
       $di++
-      $pct = $basePct + [int]((50 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
+      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
       Show-LiveProgress $pct 'Phase 3/4: Auditing npm/JS/TS' "[$di/$($dirs.Count)] $dir"
 
       $ran = $false
@@ -1974,7 +1974,7 @@ foreach ($eco in $ecoList) {
     $di = 0
     foreach ($dir in $dirs) {
       $di++
-      $pct = $basePct + [int]((50 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
+      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
       Show-LiveProgress $pct 'Phase 3/4: Auditing NuGet/.NET' "[$di/$($dirs.Count)] $dir"
 
       if ($dotnetCmd) {
@@ -2038,7 +2038,7 @@ foreach ($eco in $ecoList) {
     $di = 0
     foreach ($dir in $dirs) {
       $di++
-      $pct = $basePct + [int]((50 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
+      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
       Show-LiveProgress $pct 'Phase 3/4: Auditing Python' "[$di/$($dirs.Count)] $dir"
 
       if ($pipAudit) {

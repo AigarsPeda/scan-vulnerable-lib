@@ -523,14 +523,37 @@ button, input { font-family: inherit; }
   height: calc(1.45em * 3);
   overflow: hidden;
 }
+.progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  color: var(--muted-2);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.progress-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.progress-meta span:not(:last-child)::after {
+  content: '';
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.22);
+  margin-left: 4px;
+}
 .pct {
   font-size: 28px;
   font-weight: 800;
   color: #93c5fd;
-  min-width: 72px;
+  min-width: 84px;
   text-align: right;
   letter-spacing: -0.03em;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 .bar {
   height: 8px;

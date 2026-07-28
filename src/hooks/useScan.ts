@@ -44,6 +44,42 @@ export function useScan() {
   const reportFindingsRef = useRef<ReportFinding[]>([])
   reportFindingsRef.current = reportFindings
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const runSegmentStartedAt = useRef<number | null>(null)
+  const accumulatedRunMs = useRef(0)
+  const [elapsedMs, setElapsedMs] = useState(0)
+
+  const resetTiming = useCallback(() => {
+    runSegmentStartedAt.current = null
+    accumulatedRunMs.current = 0
+    setElapsedMs(0)
+  }, [])
+
+  const beginRunSegment = useCallback(() => {
+    if (runSegmentStartedAt.current == null) {
+      runSegmentStartedAt.current = Date.now()
+    }
+  }, [])
+
+  const pauseRunSegment = useCallback(() => {
+    if (runSegmentStartedAt.current != null) {
+      accumulatedRunMs.current += Date.now() - runSegmentStartedAt.current
+      runSegmentStartedAt.current = null
+      setElapsedMs(accumulatedRunMs.current)
+    }
+  }, [])
+
+  const readElapsedMs = useCallback(() => {
+    const live =
+      runSegmentStartedAt.current != null ? Date.now() - runSegmentStartedAt.current : 0
+    return accumulatedRunMs.current + live
+  }, [])
+
+  useEffect(() => {
+    if (scanState !== 'running') return
+    setElapsedMs(readElapsedMs())
+    const id = setInterval(() => setElapsedMs(readElapsedMs()), 1000)
+    return () => clearInterval(id)
+  }, [readElapsedMs, scanState])
 
   const addEvent = useCallback((type: string, text: string) => {
     const item: StatusEvent = {
@@ -136,15 +172,17 @@ export function useScan() {
 
   const markActive = useCallback((paused = false) => {
     if (paused) {
+      pauseRunSegment()
       setScanState('paused')
       setStatusLabel('Paused')
       setStatusTone('paused')
       return
     }
+    beginRunSegment()
     setScanState('running')
     setStatusLabel('Scanning')
     setStatusTone('running')
-  }, [])
+  }, [beginRunSegment, pauseRunSegment])
 
   const applyProgress = useCallback(
     (payload: ScanProgress, opts?: { live?: boolean }) => {
@@ -302,6 +340,7 @@ export function useScan() {
         void reloadFindings()
 
         if (payload.stopped) {
+          pauseRunSegment()
           setPercent(0)
           setPhase('STOPPED')
           setDetail('Stopped by user')
@@ -312,6 +351,7 @@ export function useScan() {
         }
 
         if (payload.error) {
+          pauseRunSegment()
           setStatusLabel('Error')
           setStatusTone('error')
           addEvent('error', payload.error)
@@ -319,6 +359,7 @@ export function useScan() {
         }
 
         if (payload.reportExists || payload.exitCode === 0) {
+          pauseRunSegment()
           setStatusLabel('Finished')
           setStatusTone('done')
           setPercent(100)
@@ -327,6 +368,7 @@ export function useScan() {
           addEvent('done', 'Scan finished')
           setTab('report')
         } else {
+          pauseRunSegment()
           setStatusLabel(`Exit ${payload.exitCode}`)
           setStatusTone('error')
           addEvent('error', `Scanner exited with code ${payload.exitCode}`)
@@ -338,7 +380,7 @@ export function useScan() {
       unsubs.forEach((u) => u())
       if (reloadTimer.current) clearTimeout(reloadTimer.current)
     }
-  }, [addEvent, appendLiveReportFinding, applyProgress, markActive, reloadFindings, scheduleReloadFindings])
+  }, [addEvent, appendLiveReportFinding, applyProgress, markActive, pauseRunSegment, reloadFindings, scheduleReloadFindings])
 
   const selectTab = useCallback(
     async (name: TabName) => {
@@ -350,6 +392,8 @@ export function useScan() {
 
   const startScan = useCallback(async () => {
     clearFindings()
+    resetTiming()
+    beginRunSegment()
     markActive(false)
     setPercent(1)
     setPhase('Starting')
@@ -371,7 +415,7 @@ export function useScan() {
       setStatusTone('error')
       addEvent('error', res.error || 'Failed to start')
     }
-  }, [addEvent, clearFindings, highOnly, markActive, maxProjects, rootPath, skipCache, skipOsv])
+  }, [addEvent, beginRunSegment, clearFindings, highOnly, markActive, maxProjects, resetTiming, rootPath, skipCache, skipOsv])
 
   const pauseScan = useCallback(async () => {
     const res = await window.scannerApi.pauseScan()
@@ -395,6 +439,7 @@ export function useScan() {
 
   const stopScan = useCallback(async () => {
     // Reset progress immediately on click — don't wait for process exit
+    pauseRunSegment()
     setPercent(0)
     setPhase('STOPPED')
     setDetail('Stopped by user')
@@ -409,7 +454,7 @@ export function useScan() {
       addEvent('warn', res.error || 'No active scan — UI reset')
       return
     }
-  }, [addEvent])
+  }, [addEvent, pauseRunSegment])
 
   const onPrimaryClick = useCallback(async () => {
     if (scanState === 'idle') await startScan()
@@ -421,13 +466,14 @@ export function useScan() {
 
   const resetScanUiForOptions = useCallback(() => {
     clearFindings()
+    resetTiming()
     setPercent(0)
     setPhase('Ready')
     setDetail('Configure options and start a scan.')
     setStatusLabel('Idle')
     setStatusTone('')
     addEvent('warn', 'Scan progress cleared after options change')
-  }, [addEvent, clearFindings])
+  }, [addEvent, clearFindings, resetTiming])
 
   const tryChangeOption = useCallback(
     (apply: () => void) => {
@@ -499,6 +545,7 @@ export function useScan() {
     phase,
     detail,
     percent,
+    elapsedMs,
     events,
     clearEvents,
     findings,
