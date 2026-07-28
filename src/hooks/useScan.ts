@@ -243,7 +243,7 @@ export function useScan() {
 
       if (!live) return
 
-      if (payload.paused === true) {
+      if (payload.paused === true || phaseUpper === 'PAUSED') {
         markActive(true)
         return
       }
@@ -257,10 +257,12 @@ export function useScan() {
         return
       }
 
+      // Only clear paused when the scanner explicitly resumes — ignore stale
+      // progress.json updates that still have paused:false mid long-running step.
       if (
-        payload.paused === false &&
         scanStateRef.current === 'paused' &&
-        payload.phase !== 'Paused'
+        payload.paused === false &&
+        /resum/i.test(String(payload.detail || ''))
       ) {
         markActive(false)
       }

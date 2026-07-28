@@ -1,15 +1,44 @@
 {
   "name": "scan-vulnerable-lib",
   "version": "1.0.0",
-  "description": "Cross-platform GUI for the vulnerable library scanner (Windows + macOS)",
+  "description": "Desktop vulnerable library scanner for Windows and macOS. Find insecure npm, NuGet, PyPI, Go, and other dependencies with a live Electron GUI and OSV-backed checks.",
   "main": "./out/main/index.js",
   "author": "AigarsPeda",
   "license": "MIT",
+  "homepage": "https://github.com/AigarsPeda/scan-vulnerable-lib",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AigarsPeda/scan-vulnerable-lib.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AigarsPeda/scan-vulnerable-lib/issues"
+  },
+  "keywords": [
+    "vulnerability-scanner",
+    "vulnerable-libraries",
+    "dependency-scanner",
+    "security-scanner",
+    "osv",
+    "npm-audit",
+    "nuget",
+    "pypi",
+    "software-composition-analysis",
+    "sca",
+    "electron",
+    "powershell",
+    "cve",
+    "supply-chain-security",
+    "desktop-app"
+  ],
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
+    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:dir": "npm run build && electron-builder --dir"
   },
   "dependencies": {
     "motion": "^12.42.2",
@@ -22,6 +51,7 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",
     "electron": "^39.8.5",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "typescript": "^7.0.2",
     "vite": "^6.4.3"

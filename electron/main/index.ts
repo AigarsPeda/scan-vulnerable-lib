@@ -32,8 +32,14 @@ function readControlAction(): string {
 }
 
 function projectRoot(): string {
-  // out/main -> project root
+  // Dev: out/main -> repo root
   return path.join(__dirname, '../..')
+}
+
+/** Packaged apps load scripts/assets from extraResources; dev uses the repo root. */
+function resourceRoot(): string {
+  if (app.isPackaged) return process.resourcesPath
+  return projectRoot()
 }
 
 function getDataDir(): string {
@@ -64,7 +70,11 @@ function writeControlAction(action: string): void {
 }
 
 function getScannerScriptPath(): string {
-  return path.join(projectRoot(), 'scripts', 'scan-vulnerable-libs.ps1')
+  return path.join(resourceRoot(), 'scripts', 'scan-vulnerable-libs.ps1')
+}
+
+function getAppIconPath(): string {
+  return path.join(resourceRoot(), 'assets', 'icon.png')
 }
 
 function resolvePowerShell(): string {
@@ -113,7 +123,24 @@ function startProgressPolling(): void {
   stopProgressPolling()
   progressTimer = setInterval(() => {
     const prog = readProgressFile()
-    if (prog) send('scan-progress', prog)
+    if (prog) {
+      const action = readControlAction()
+      // Keep UI paused while control says pause — stale progress.json still has paused:false
+      // until the scanner reaches the next Wait-IfGuiPaused checkpoint.
+      if (action === 'pause') {
+        send('scan-progress', {
+          ...prog,
+          paused: true,
+          phase: 'Paused',
+          detail:
+            typeof prog.detail === 'string' && /resume/i.test(prog.detail)
+              ? prog.detail
+              : 'Pause requested — waiting for current step to finish…',
+        })
+      } else {
+        send('scan-progress', prog)
+      }
+    }
     const report = getReportPath()
     if (fs.existsSync(report)) {
       try {
@@ -150,7 +177,7 @@ function startProgressPolling(): void {
 }
 
 function createWindow(): void {
-  const iconPath = path.join(projectRoot(), 'assets', 'icon.png')
+  const iconPath = getAppIconPath()
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -158,7 +185,7 @@ function createWindow(): void {
     minHeight: 640,
     title: 'Vulnerable Library Scanner',
     backgroundColor: '#0b0b0b',
-    icon: iconPath,
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -559,6 +586,25 @@ ipcMain.handle('pause-scan', async () => {
   if (!scanProcess) return { ok: false, error: 'No scan is running.' }
   try {
     writeControlAction('pause')
+    const prev = readProgressFile() || {}
+    const percent = typeof prev.percent === 'number' ? prev.percent : undefined
+    const detail = 'Pause requested — waiting for current step to finish…'
+    try {
+      fs.writeFileSync(
+        getProgressPath(),
+        JSON.stringify({
+          ...prev,
+          paused: true,
+          phase: 'Paused',
+          detail,
+          updated: new Date().toISOString(),
+        }),
+        'utf8'
+      )
+    } catch {
+      // ignore
+    }
+    send('scan-progress', { percent, phase: 'Paused', detail, paused: true })
     send('scan-status', { running: true, paused: true })
     pushLog('warn', 'Pause requested — waiting for current step…')
     return { ok: true }
@@ -571,6 +617,21 @@ ipcMain.handle('resume-scan', async () => {
   if (!scanProcess) return { ok: false, error: 'No scan is running.' }
   try {
     writeControlAction('run')
+    try {
+      const prev = readProgressFile() || {}
+      fs.writeFileSync(
+        getProgressPath(),
+        JSON.stringify({
+          ...prev,
+          paused: false,
+          detail: 'Resuming…',
+          updated: new Date().toISOString(),
+        }),
+        'utf8'
+      )
+    } catch {
+      // ignore
+    }
     send('scan-status', { running: true, paused: false })
     pushLog('meta', 'Resume requested')
     return { ok: true }

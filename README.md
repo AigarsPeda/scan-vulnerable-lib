@@ -1,70 +1,161 @@
-# Vulnerable Library Scanner (Electron)
+# Vulnerable Library Scanner
 
-One GUI for **Windows and macOS**. React + TypeScript UI (electron-vite) that runs the shared PowerShell scanner.
+**Desktop dependency vulnerability scanner for Windows and macOS.** Find insecure libraries across npm, NuGet, PyPI, Go, Rust, PHP, and more — with a live Electron GUI, OSV-backed checks, and exportable reports.
 
-## Requirements
+If you are searching for a **vulnerable library scanner**, **dependency vulnerability scanner**, **software composition analysis (SCA)** tool, or a desktop alternative to running `npm audit` / `dotnet list package --vulnerable` by hand, this project is built for that workflow.
 
-- [Node.js](https://nodejs.org/) 18+
-- **Windows:** PowerShell 5.1+ (or PowerShell 7 `pwsh` — parallel project audits need PS7+)
+---
+
+## Why this exists
+
+Modern machines often hold dozens of projects and language ecosystems. Checking them one by one is slow and easy to miss. This app:
+
+1. Discovers projects and package managers on disk  
+2. Runs native audits when available (`npm audit`, `dotnet`, `pip-audit`, …)  
+3. Falls back to the [OSV](https://osv.dev/) API for packages without a local auditor  
+4. Streams findings into a live Report you can filter and export  
+
+---
+
+## Download installers
+
+| Platform | Installer |
+|----------|-----------|
+| **Windows** | `Vuln Scanner-*-Windows-Setup-x64.exe` (NSIS) and `Vuln Scanner-*-Windows-Portable-x64.exe` from [Releases](https://github.com/AigarsPeda/scan-vulnerable-lib/releases) |
+| **macOS** | DMG / ZIP from [Releases](https://github.com/AigarsPeda/scan-vulnerable-lib/releases) (build on a Mac or CI) |
+
+> After cloning, you can also build locally (see [Build installers](#build-installers)).
+
+### Runtime requirements
+
+- **Windows:** PowerShell 5.1+ (PowerShell 7 `pwsh` recommended for faster parallel audits)
 - **macOS:** [PowerShell 7](https://aka.ms/powershell) (`pwsh`)
+- Optional tools improve coverage: Node.js/`npm`, .NET SDK, `pip-audit`, `govulncheck`, `cargo audit`, Composer, etc.
 
-## Install
+---
+
+## Features
+
+- **Multi-language scanning** — JavaScript/TypeScript (npm/yarn), .NET (NuGet), Python (PyPI), Go, Rust, PHP, Ruby, Java/Maven, Dart, Swift, Scala  
+- **Live Progress** — percent, phase, per-ecosystem counters, elapsed time, streaming findings  
+- **Native Report tab** — filter by severity, project/cache, ecosystem, has-fix; Open / Copy path  
+- **Exports** — JSON, TXT, CSV, Markdown, HTML  
+- **Controls** — Start / Pause / Resume / Stop; options locked while scanning  
+- **Performance** — OSV cache + `/v1/querybatch`, skip redundant OSV after native audits, finding dedupe, command timeouts, capped parallel project audits on PowerShell 7+  
+
+---
+
+## Screenshots
+
+### Live Progress
+
+![Vulnerable library scanner — live Progress view with streaming findings](docs/screenshots/progress.png)
+
+Scan in progress: phase/percent, per-ecosystem counters, live findings, and status log.
+
+### Pause / Resume
+
+![Vulnerable library scanner — paused Progress view](docs/screenshots/progress-paused.png)
+
+Pause a long scan and resume when ready. Options stay locked while a run is active.
+
+### Findings Report & Export
+
+![Vulnerable library scanner — Report tab with filters and export formats](docs/screenshots/report.png)
+
+Filter by severity, project, ecosystem, and fix availability. Export as JSON, TXT, CSV, Markdown, or HTML.
+
+---
+
+## Build installers
 
 ```bash
-cd ~/Desktop/scan-vulnerable-lib   # or your path
+git clone https://github.com/AigarsPeda/scan-vulnerable-lib.git
+cd scan-vulnerable-lib
 npm install
 ```
 
-## Run
+| Command | Result |
+|---------|--------|
+| `npm run dist:win` | Windows NSIS + portable under `release/` |
+| `npm run dist:mac` | macOS DMG + ZIP under `release/` (run on macOS) |
+| `npm run dist` | Build for the current platform |
+| `npm run dist:dir` | Unpacked app folder (fast smoke test, no installer) |
+
+Installers and portable builds land in the `release/` folder.
+
+### Development
 
 ```bash
-npm run dev      # development (hot reload)
-npm start        # preview production build
-npm run build    # compile main/preload/renderer
+npm run dev        # hot reload
+npm run build      # compile Electron main/preload/renderer
+npm start          # preview production build
 npm run typecheck
 ```
 
-## What it does
+---
 
-- Runs the bundled scanner: `scripts/scan-vulnerable-libs.ps1`
-- Live **Progress** (percent, item counts, per-ecosystem bar, elapsed time) and streaming findings
-- Native **Report** tab (not an HTML iframe) with live updates from `findings.json`
-- Report filters: severity, project/cache, ecosystem, has-fix; Open / Copy path per project
-- Start / Pause / Resume / Stop (Stop resets progress immediately; options stay locked while scanning)
-- Working files under the **app data folder**
-- **Export** JSON / TXT / CSV / Markdown / HTML (disabled while a scan is running)
+## How to use
 
-### Scanner performance notes
+1. Install / run the app  
+2. Optionally set a **root folder** (recommended — limits scan scope)  
+3. Adjust options (High/Critical only, skip caches, skip OSV, max projects)  
+4. Click **Start** — watch Progress, open **Report** when the green indicator appears  
+5. Export the format you need  
 
-- OSV in-memory cache, retries, and `/v1/querybatch`
-- Skips OSV when a native audit already ran (npm/yarn, `dotnet list`, pip-audit)
-- Finding dedupe + native-command timeouts
-- On PowerShell 7+, capped parallel project audits (degree 3) for npm / NuGet / PyPI
-
-## Options in the UI
+### Options
 
 | Option | Meaning |
 |--------|---------|
 | High / Critical only | Passes `-HighOnly` |
 | Skip caches | Passes `-SkipCache` |
 | Skip OSV API | Passes `-SkipOsv` |
-| Max projects / ecosystem | Passes `-MaxProjectsPerEco` |
-| Optional root folder | Passes `-Drive` |
+| Max projects / ecosystem | Passes `-MaxProjectsPerEco` (default 80) |
+| Optional root folder | Passes `-Drive` — strongly recommended for focused scans |
+
+Working files (`findings.json`, progress, etc.) live in the Electron **app data** folder.
+
+---
+
+## Who is this for?
+
+- Developers auditing **local machines** or shared project roots  
+- Security-minded teams doing light **SCA / dependency vulnerability** checks  
+- Anyone who wants a **GUI vulnerable package scanner** instead of juggling CLI tools per language  
+
+Not a replacement for enterprise SCA platforms — it is a practical desktop scanner for multi-language workstations and project folders.
+
+---
 
 ## Project layout
 
 ```
 scan-vulnerable-lib/
-  electron/main/       # Electron main (TypeScript)
-  electron/preload/    # Preload bridge (TypeScript)
+  electron/main/       # Electron main process
+  electron/preload/    # Secure preload bridge
   src/                 # React + TypeScript UI
-  scripts/             # Bundled scanner (.ps1) for Win + Mac
-  assets/              # App icon
-  package.json
+  scripts/             # PowerShell scanner (Windows + macOS)
+  assets/              # App icons
+  electron-builder.yml # Installer packaging
+  release/             # Built installers (after npm run dist:*)
 ```
 
-## Notes
+The PowerShell scanner also runs standalone (Desktop output) without `-GuiMode`.
 
-- On macOS install PowerShell 7 (`pwsh`) via https://aka.ms/powershell
-- Working files live under the Electron app data folder (`findings.json`, progress, etc.)
-- Standalone script still supports Desktop output when run without `-GuiMode`
+---
+
+## Keywords
+
+`vulnerable library scanner` · `dependency vulnerability scanner` · `OSV scanner` · `npm audit GUI` · `NuGet vulnerability` · `PyPI security scan` · `software composition analysis` · `SCA desktop` · `CVE dependency check` · `supply chain security`
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Contributing / issues
+
+Bug reports and ideas: [GitHub Issues](https://github.com/AigarsPeda/scan-vulnerable-lib/issues).
+
+If this helps you, starring the repo and sharing release links makes it easier for others to find a **desktop vulnerable dependency scanner** for Windows and Mac.

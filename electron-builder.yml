@@ -1,0 +1,62 @@
+appId: com.aigarspeda.vulnscanner
+productName: Vuln Scanner
+copyright: Copyright © AigarsPeda
+directories:
+  output: release
+  buildResources: assets
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: scripts
+    to: scripts
+  - from: assets
+    to: assets
+asar: true
+electronLanguages:
+  - en
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Vuln Scanner
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  license: LICENSE
+  artifactName: ${productName}-${version}-Windows-Setup-${arch}.${ext}
+portable:
+  artifactName: ${productName}-${version}-Windows-Portable-${arch}.${ext}
+mac:
+  icon: assets/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  artifactName: ${productName}-${version}-macOS-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+dmg:
+  artifactName: ${productName}-${version}-macOS-${arch}.${ext}
+linux:
+  icon: assets/icon.png
+  category: Development
+  target:
+    - AppImage
+  artifactName: ${productName}-${version}-Linux-${arch}.${ext}
+publish: null

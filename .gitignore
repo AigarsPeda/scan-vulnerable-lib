@@ -1,7 +1,12 @@
 node_modules/
 dist/
 out/
+release/
 .DS_Store
 *.log
 .vscode/
 .idea/
+*.exe
+*.dmg
+*.blockmap
+*.AppImage
