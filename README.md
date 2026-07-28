@@ -22,7 +22,7 @@ Modern machines often hold dozens of projects and language ecosystems. Checking 
 | Platform | Installer |
 |----------|-----------|
 | **Windows** | `Vuln Scanner-*-Windows-Setup-x64.exe` (NSIS) and `Vuln Scanner-*-Windows-Portable-x64.exe` from [Releases](https://github.com/AigarsPeda/scan-vulnerable-lib/releases) |
-| **macOS** | DMG / ZIP from [Releases](https://github.com/AigarsPeda/scan-vulnerable-lib/releases) (build on a Mac or CI) |
+| **macOS** | DMG from [Releases](https://github.com/AigarsPeda/scan-vulnerable-lib/releases) (build on a Mac or CI) |
 
 > After cloning, you can also build locally (see [Build installers](#build-installers)).
 
@@ -77,7 +77,7 @@ npm install
 | Command | Result |
 |---------|--------|
 | `npm run dist:win` | Windows NSIS + portable under `release/` |
-| `npm run dist:mac` | macOS DMG + ZIP under `release/` (run on macOS) |
+| `npm run dist:mac` | macOS DMG under `release/` (run on macOS) |
 | `npm run dist` | Build for the current platform |
 | `npm run dist:dir` | Unpacked app folder (fast smoke test, no installer) |
 
