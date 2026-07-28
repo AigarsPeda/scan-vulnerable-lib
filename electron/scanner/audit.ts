@@ -118,7 +118,7 @@ async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): P
         ...(pkg.devDependencies || {}),
       })) {
         const cleaned = String(ver).replace(/^[~^>=<\s]+/, '')
-        if (/^\d/.test(cleaned)) osv.enqueue('npm', 'npm', name, cleaned, pkgPath, 'package.json')
+        if (/^\d/.test(cleaned)) osv.enqueue('npm', 'npm', name, cleaned, dir, 'package.json')
       }
     }
   }
@@ -245,19 +245,19 @@ async function auditNuget(dir: string, findings: FindingsStore, osv: OsvClient):
       if (file.endsWith('packages.config')) {
         const text = readText(file)
         for (const m of text.matchAll(/id="([^"]+)"\s+version="([^"]+)"/gi)) {
-          osv.enqueue('nuget', 'NuGet', m[1], m[2], file, 'packages.config')
+          osv.enqueue('nuget', 'NuGet', m[1], m[2], dir, 'packages.config')
         }
       } else {
         const text = readText(file)
         for (const m of text.matchAll(
           /<PackageReference[^>]*(?:Include|Update)="([^"]+)"[^>]*Version="([^"]+)"/gi
         )) {
-          osv.enqueue('nuget', 'NuGet', m[1], m[2], file, path.basename(file))
+          osv.enqueue('nuget', 'NuGet', m[1], m[2], dir, path.basename(file))
         }
         for (const m of text.matchAll(
           /<PackageReference[^>]*Version="([^"]+)"[^>]*(?:Include|Update)="([^"]+)"/gi
         )) {
-          osv.enqueue('nuget', 'NuGet', m[2], m[1], file, path.basename(file))
+          osv.enqueue('nuget', 'NuGet', m[2], m[1], dir, path.basename(file))
         }
       }
     }
@@ -306,7 +306,7 @@ async function auditPyPi(dir: string, findings: FindingsStore, osv: OsvClient): 
     if (fs.existsSync(req)) {
       for (const line of readText(req).split(/\r?\n/)) {
         const m = line.match(/^([A-Za-z0-9_.-]+)\s*==\s*([A-Za-z0-9_.+-]+)/)
-        if (m) osv.enqueue('PyPI', 'PyPI', m[1], m[2], req, 'requirements.txt')
+        if (m) osv.enqueue('PyPI', 'PyPI', m[1], m[2], dir, 'requirements.txt')
       }
     }
   }
@@ -342,7 +342,7 @@ async function auditGo(dir: string, findings: FindingsStore, osv: OsvClient): Pr
   if (fs.existsSync(mod)) {
     for (const line of readText(mod).split(/\r?\n/)) {
       const m = line.match(/^\s*([^\s]+)\s+v([0-9][^\s]+)/)
-      if (m) osv.enqueue('Go', 'Go', m[1], `v${m[2]}`, mod, 'go.mod')
+      if (m) osv.enqueue('Go', 'Go', m[1], `v${m[2]}`, dir, 'go.mod')
     }
   }
 }
@@ -413,7 +413,7 @@ async function auditMaven(dir: string, findings: FindingsStore, osv: OsvClient):
     const v = block[0].match(/<version>([^<]+)<\/version>/i)
     if (!g || !a || !v) continue
     if (v[1].includes('${')) continue
-    osv.enqueue('Maven', 'Maven', `${g[1]}:${a[1]}`, v[1], pom, 'pom.xml')
+    osv.enqueue('Maven', 'Maven', `${g[1]}:${a[1]}`, v[1], dir, 'pom.xml')
   }
 }
 
@@ -429,7 +429,7 @@ async function auditPub(dir: string, findings: FindingsStore, osv: OsvClient): P
     }
     const ver = line.match(/^\s+version:\s+"([^"]+)"/)
     if (name && ver) {
-      osv.enqueue('Pub', 'Pub', name, ver[1], lock, 'pubspec.lock')
+      osv.enqueue('Pub', 'Pub', name, ver[1], dir, 'pubspec.lock')
       name = ''
     }
   }
@@ -446,7 +446,7 @@ async function auditSwift(dir: string, findings: FindingsStore, osv: OsvClient):
   for (const pin of pins) {
     const name = pin.location || pin.repositoryURL
     const version = pin.state?.version || pin.version
-    if (name && version) osv.enqueue('Swift', 'SwiftURL', name, version, resolved, 'Package.resolved')
+    if (name && version) osv.enqueue('Swift', 'SwiftURL', name, version, dir, 'Package.resolved')
   }
 }
 
@@ -455,7 +455,7 @@ async function auditScala(dir: string, findings: FindingsStore, osv: OsvClient):
     if (!fs.existsSync(file)) continue
     const text = readText(file)
     for (const m of text.matchAll(/"([^"]+)"\s*%{1,3}\s*"([^"]+)"\s*%\s*"([^"]+)"/g)) {
-      osv.enqueue('Scala', 'Maven', `${m[1]}:${m[2]}`, m[3], file, path.basename(file))
+      osv.enqueue('Scala', 'Maven', `${m[1]}:${m[2]}`, m[3], dir, path.basename(file))
     }
   }
 }

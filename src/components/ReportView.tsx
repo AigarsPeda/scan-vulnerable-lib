@@ -27,10 +27,71 @@ const SEV_RANK: Record<string, number> = {
   unknown: 4,
 }
 
+const MANIFEST_BASENAMES = new Set(
+  [
+    'package.json',
+    'package-lock.json',
+    'yarn.lock',
+    'pnpm-lock.yaml',
+    'requirements.txt',
+    'pipfile',
+    'pipfile.lock',
+    'pyproject.toml',
+    'poetry.lock',
+    'environment.yml',
+    'packages.config',
+    'directory.packages.props',
+    'pom.xml',
+    'build.gradle',
+    'build.gradle.kts',
+    'go.mod',
+    'go.sum',
+    'cargo.toml',
+    'cargo.lock',
+    'composer.json',
+    'composer.lock',
+    'gemfile',
+    'gemfile.lock',
+    'pubspec.yaml',
+    'pubspec.lock',
+    'package.swift',
+    'package.resolved',
+    'build.sbt',
+    'plugins.sbt',
+  ].map((s) => s.toLowerCase())
+)
+
+const MANIFEST_EXTS = new Set(['.csproj', '.fsproj', '.vbproj', '.sln'])
+
+/** Prefer project folder name over manifest filename (package.json, requirements.txt, …). */
 function folderLabel(pathValue: string): string {
   if (!pathValue) return '(unknown)'
-  const parts = pathValue.replace(/\//g, '\\').split('\\').filter(Boolean)
-  return parts[parts.length - 1] || pathValue
+  const parts = pathValue.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (!parts.length) return pathValue
+  let i = parts.length - 1
+  const last = parts[i]
+  const lower = last.toLowerCase()
+  if (MANIFEST_BASENAMES.has(lower) || [...MANIFEST_EXTS].some((ext) => lower.endsWith(ext))) {
+    i -= 1
+  }
+  return parts[i] || last || pathValue
+}
+
+/** Normalize finding path to project folder when it points at a manifest file. */
+function projectKey(pathValue: string): string {
+  if (!pathValue || pathValue === '(unknown)') return pathValue || '(unknown)'
+  const normalized = pathValue.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (!parts.length) return pathValue
+  const last = parts[parts.length - 1]
+  const lower = last.toLowerCase()
+  if (MANIFEST_BASENAMES.has(lower) || [...MANIFEST_EXTS].some((ext) => lower.endsWith(ext))) {
+    const parent = normalized.slice(0, normalized.length - last.length - 1)
+    // Preserve Windows drive prefix style when original used backslashes
+    if (pathValue.includes('\\')) return parent.replace(/\//g, '\\')
+    return parent || pathValue
+  }
+  return pathValue
 }
 
 function sortBySeverity(a: ReportFinding, b: ReportFinding): number {
@@ -71,7 +132,7 @@ export function ReportView(props: ReportViewProps) {
   const projectOptions = useMemo(() => {
     const map = new Map<string, { path: string; name: string; isCache: boolean; count: number }>()
     for (const f of props.findings) {
-      const path = f.path || '(unknown)'
+      const path = projectKey(f.path || '(unknown)')
       const existing = map.get(path)
       if (existing) {
         existing.count++
@@ -106,7 +167,8 @@ export function ReportView(props: ReportViewProps) {
     for (const f of props.findings) {
       if (kind === 'project' && f.isCache) continue
       if (kind === 'cache' && !f.isCache) continue
-      if (selectedProject !== 'all' && (f.path || '(unknown)') !== selectedProject) continue
+      const key = projectKey(f.path || '(unknown)')
+      if (selectedProject !== 'all' && key !== selectedProject) continue
       if (selectedEco !== 'all' && (f.ecosystem || '') !== selectedEco) continue
       if (fix === 'fix' && !f.hasFix) continue
       if (fix === 'nofix' && f.hasFix) continue
@@ -115,7 +177,6 @@ export function ReportView(props: ReportViewProps) {
         const hay = `${f.packageName} ${f.version} ${f.title} ${f.path} ${f.advisory} ${f.ecosystem}`.toLowerCase()
         if (!hay.includes(q)) continue
       }
-      const key = f.path || '(unknown)'
       const list = map.get(key) || []
       list.push(f)
       map.set(key, list)
