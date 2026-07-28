@@ -15,8 +15,8 @@ extraResources:
 asar: true
 asarUnpack:
   - '**/scanner.js'
-electronLanguages:
-  - en
+# Keep Chromium locale packs. Filtering to "en" removes en-US.pak and leaves
+# an empty locales/ folder, which causes a permanent black window on Windows.
 win:
   icon: assets/icon.ico
   target:

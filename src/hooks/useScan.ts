@@ -274,6 +274,13 @@ export function useScan() {
     let cancelled = false
     ;(async () => {
       try {
+        if (!window.scannerApi) {
+          if (!cancelled) {
+            setScriptMissing(true)
+            addEvent('error', 'Preload bridge missing (scannerApi). Rebuild the Windows package.')
+          }
+          return
+        }
         const [info, runtime] = await Promise.all([
           window.scannerApi.getAppInfo(),
           window.scannerApi.getScanRuntime(),
@@ -343,6 +350,7 @@ export function useScan() {
   }, [])
 
   useEffect(() => {
+    if (!window.scannerApi) return
     const unsubs = [
       window.scannerApi.onScanLog((payload) => {
         addEvent(payload.type || 'info', payload.text || '')

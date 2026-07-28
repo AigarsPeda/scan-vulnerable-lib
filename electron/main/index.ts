@@ -189,8 +189,22 @@ function startProgressPolling(): void {
   }, 400)
 }
 
+function appendBootLog(line: string): void {
+  try {
+    const logPath = path.join(app.getPath('userData'), 'boot.log')
+    fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`, 'utf8')
+  } catch {
+    // ignore
+  }
+}
+
 function createWindow(): void {
   const iconPath = getAppIconPath()
+  const preloadPath = path.join(__dirname, '../preload/index.js')
+  const rendererHtml = path.join(__dirname, '../renderer/index.html')
+  appendBootLog(`createWindow preload=${preloadPath} exists=${fs.existsSync(preloadPath)}`)
+  appendBootLog(`createWindow html=${rendererHtml} exists=${fs.existsSync(rendererHtml)}`)
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -201,7 +215,7 @@ function createWindow(): void {
     show: false,
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -209,23 +223,34 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => {
+    appendBootLog('ready-to-show')
     mainWindow?.show()
   })
 
   // If the renderer fails to paint (common on some Windows GPU drivers), still show.
   setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      appendBootLog('fallback-show after 2500ms')
       mainWindow.show()
     }
   }, 2500)
 
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) appendBootLog(`console[${level}] ${message} (${sourceId}:${line})`)
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    appendBootLog(`did-finish-load url=${mainWindow?.webContents.getURL()}`)
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(rendererHtml)
   }
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    appendBootLog(`did-fail-load code=${code} desc=${desc} url=${url}`)
     pushLog('error', `Window failed to load (${code}): ${desc} [${url}]`)
   })
 
@@ -237,6 +262,8 @@ function createWindow(): void {
 // Windows packaged builds can hit GPU compositor black screens; prefer software.
 if (process.platform === 'win32') {
   app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
 }
 
 app.whenReady().then(() => {
