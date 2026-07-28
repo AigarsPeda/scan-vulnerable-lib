@@ -82,7 +82,14 @@ export async function auditAll(
         default:
           break
       }
-      findings.maybeFlush(state)
+      // Flush OSV every few projects so NuGet/PackageReference hits show up live
+      // (otherwise findingCount stays 0 until the whole ecosystem finishes).
+      if ((i + 1) % 5 === 0) {
+        await osv.flush(findings)
+        findings.maybeFlush(state, true)
+      } else {
+        findings.maybeFlush(state)
+      }
     }
     await osv.flush(findings)
     findings.maybeFlush(state, true)
@@ -97,7 +104,7 @@ async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): P
   let nativeOk = false
 
   if (npm) {
-    const res = await runNative(npm, ['audit', '--json', '--omit=dev'], { cwd: dir })
+    const res = await runNative(npm, ['audit', '--json'], { cwd: dir })
     if (isNpmAuditJson(res.stdout)) {
       nativeOk = true
       parseNpmAudit(res.stdout, dir, findings, 'npm-audit')
@@ -131,13 +138,26 @@ async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): P
 }
 
 function isNpmAuditJson(stdout: string): boolean {
+  const trimmed = (stdout || '').trim()
+  if (!trimmed) return false
+  // npm may print warnings before JSON — take the first {...} block.
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) return false
   try {
-    const audit = JSON.parse(stdout) as {
+    const audit = JSON.parse(trimmed.slice(start, end + 1)) as {
       vulnerabilities?: unknown
       advisories?: unknown
-      error?: unknown
+      error?: { code?: string; summary?: string }
+      auditReportVersion?: number
     }
-    return Boolean(audit && (audit.vulnerabilities || audit.advisories || audit.error))
+    if (!audit || typeof audit !== 'object') return false
+    if (audit.error && !audit.vulnerabilities && !audit.advisories) return false
+    return (
+      audit.vulnerabilities != null ||
+      audit.advisories != null ||
+      audit.auditReportVersion != null
+    )
   } catch {
     return false
   }
@@ -146,7 +166,10 @@ function isNpmAuditJson(stdout: string): boolean {
 function parseNpmAudit(stdout: string, dir: string, findings: FindingsStore, source: string): void {
   let audit: Record<string, unknown>
   try {
-    audit = JSON.parse(stdout)
+    const trimmed = (stdout || '').trim()
+    const start = trimmed.indexOf('{')
+    const end = trimmed.lastIndexOf('}')
+    audit = JSON.parse(start >= 0 && end > start ? trimmed.slice(start, end + 1) : trimmed)
   } catch {
     return
   }
@@ -235,34 +258,32 @@ function parseYarnAudit(stdout: string, dir: string, findings: FindingsStore): v
 
 async function auditNuget(dir: string, findings: FindingsStore, osv: OsvClient): Promise<void> {
   const dotnet = resolveTool('dotnet')
-  let nativeOk = false
+  let foundNative = false
   if (dotnet) {
     const res = await runNative(
       dotnet,
       ['list', 'package', '--vulnerable', '--include-transitive'],
       { cwd: dir }
     )
-    // Treat any successful stdout as a usable native result (may legitimately be empty).
-    if (res.code === 0 || res.stdout.trim().length > 0) {
-      nativeOk = true
-      for (const line of res.stdout.split(/\r?\n/)) {
-        const m = line.match(/^\s*>\s*(\S+)\s+(\S+)/)
-        if (!m) continue
-        findings.add({
-          Ecosystem: 'nuget',
-          Source: 'dotnet-list-vulnerable',
-          Severity: 'high',
-          Package: m[1],
-          Version: m[2],
-          Title: 'Vulnerable NuGet package reported by dotnet',
-          Advisory: '',
-          Path: dir,
-          Fix: 'Upgrade to a non-vulnerable version',
-        })
-      }
+    for (const line of res.stdout.split(/\r?\n/)) {
+      const m = line.match(/^\s*>\s*(\S+)\s+(\S+)/)
+      if (!m) continue
+      foundNative = true
+      findings.add({
+        Ecosystem: 'nuget',
+        Source: 'dotnet-list-vulnerable',
+        Severity: 'high',
+        Package: m[1],
+        Version: m[2],
+        Title: 'Vulnerable NuGet package reported by dotnet',
+        Advisory: '',
+        Path: dir,
+        Fix: 'Upgrade to a non-vulnerable version',
+      })
     }
   }
-  if (!nativeOk) {
+  // dotnet often exits 0 with no ">" lines (needs restore / no local DB). Fall back to OSV.
+  if (!foundNative) {
     for (const file of listFiles(dir, ['.csproj', '.fsproj', '.vbproj', 'packages.config'])) {
       if (file.endsWith('packages.config')) {
         const text = readText(file)

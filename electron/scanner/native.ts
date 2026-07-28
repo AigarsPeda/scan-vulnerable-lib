@@ -46,6 +46,13 @@ function quoteWin(s: string): string {
 function resolveNodeExe(): string {
   const fromPath = which('node')
   if (fromPath) return fromPath
+  if (process.platform === 'win32') {
+    const pf = process.env.ProgramFiles || 'C:\\Program Files'
+    const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+    for (const c of [path.join(pf, 'nodejs', 'node.exe'), path.join(pf86, 'nodejs', 'node.exe')]) {
+      if (fs.existsSync(c)) return c
+    }
+  }
   // Packaged scanner runs under ELECTRON_RUN_AS_NODE — electron.exe can execute JS.
   return process.execPath
 }

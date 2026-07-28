@@ -118,11 +118,16 @@ export function groupProjects(
   for (const [, info] of Object.entries(detected)) {
     const eco = info.eco
     if (!projects[eco]) projects[eco] = []
-    for (const m of info.manifests) {
-      const dir = path.dirname(m)
-      if (!projects[eco].includes(dir) && projects[eco].length < maxProjects) {
-        projects[eco].push(dir)
-      }
+    // Shallower paths first so maxProjects isn't burned on deep nested csproj folders.
+    const dirs = [...new Set(info.manifests.map((m) => path.dirname(m)))].sort((a, b) => {
+      const da = a.split(/[\\/]/).filter(Boolean).length
+      const db = b.split(/[\\/]/).filter(Boolean).length
+      if (da !== db) return da - db
+      return a.localeCompare(b)
+    })
+    for (const dir of dirs) {
+      if (projects[eco].length >= maxProjects) break
+      if (!projects[eco].includes(dir)) projects[eco].push(dir)
     }
   }
   return projects
