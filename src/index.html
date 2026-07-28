@@ -2,74 +2,87 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' file:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vulnerable Library Scanner</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">Cross-platform scanner</p>
-        <h1>Vulnerable Library Scanner</h1>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="eyebrow">Win + Mac</p>
+        <h1>Vuln Scanner</h1>
         <p class="sub" id="platform-line">Detecting platform…</p>
       </div>
-      <div class="status-pill" id="status-pill">Idle</div>
-    </header>
 
-    <section class="panel">
-      <h2>Scan options</h2>
-      <div class="grid">
-        <label class="check">
-          <input type="checkbox" id="opt-high-only" />
-          <span>High / Critical only</span>
-        </label>
-        <label class="check">
-          <input type="checkbox" id="opt-skip-cache" />
-          <span>Skip package caches</span>
-        </label>
-        <label class="check">
-          <input type="checkbox" id="opt-skip-osv" />
-          <span>Skip OSV API fallback</span>
-        </label>
+      <div class="status-pill" id="status-pill">Idle</div>
+
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="scan" id="tab-scan">Progress</button>
+        <button type="button" class="tab" data-tab="report" id="tab-report">Report</button>
+      </nav>
+
+      <section class="side-panel">
+        <h2>Options</h2>
+        <label class="check"><input type="checkbox" id="opt-high-only" /><span>High / Critical only</span></label>
+        <label class="check"><input type="checkbox" id="opt-skip-cache" /><span>Skip caches</span></label>
+        <label class="check"><input type="checkbox" id="opt-skip-osv" /><span>Skip OSV API</span></label>
         <label class="field">
-          <span>Max projects per ecosystem</span>
+          <span>Max projects / ecosystem</span>
           <input type="number" id="opt-max" min="1" max="500" value="80" />
         </label>
-        <label class="field path-field">
-          <span>Optional root path / drive</span>
+        <label class="field">
+          <span>Optional root folder</span>
           <div class="path-row">
-            <input type="text" id="opt-path" placeholder="e.g. C:\GeoWeb2 or /Users/you/Projects (empty = defaults)" />
-            <button type="button" class="btn ghost" id="btn-pick">Browse</button>
+            <input type="text" id="opt-path" placeholder="Leave empty for defaults" />
+            <button type="button" class="btn ghost" id="btn-pick">…</button>
           </div>
         </label>
-      </div>
+      </section>
 
-      <div class="actions">
-        <button type="button" class="btn primary" id="btn-start">Start scan</button>
+      <div class="side-actions">
+        <button type="button" class="btn primary" id="btn-run">Start</button>
         <button type="button" class="btn danger" id="btn-stop" disabled>Stop</button>
-        <button type="button" class="btn" id="btn-open" disabled>Open HTML report</button>
-        <button type="button" class="btn ghost" id="btn-reveal" disabled>Show in folder</button>
+        <button type="button" class="btn ghost" id="btn-reveal">Open data folder</button>
       </div>
-    </section>
+    </aside>
 
-    <section class="panel paths">
-      <h2>Paths</h2>
-      <dl>
-        <div><dt>Scanner script</dt><dd id="path-script">—</dd></div>
-        <div><dt>HTML report</dt><dd id="path-report">—</dd></div>
-        <div><dt>PowerShell</dt><dd id="path-ps">—</dd></div>
-      </dl>
-    </section>
+    <main class="main">
+      <section class="view active" id="view-scan">
+        <div class="progress-card">
+          <div class="progress-top">
+            <div>
+              <h2 id="phase-text">Ready</h2>
+              <p class="detail" id="detail-text">Configure options and start a scan.</p>
+            </div>
+            <div class="pct" id="pct-text">0%</div>
+          </div>
+          <div class="bar" aria-hidden="true">
+            <div class="bar-fill" id="bar-fill"></div>
+          </div>
+        </div>
 
-    <section class="panel log-panel">
-      <div class="log-head">
-        <h2>Live output</h2>
-        <button type="button" class="btn ghost small" id="btn-clear">Clear</button>
-      </div>
-      <pre id="log" class="log" aria-live="polite"></pre>
-    </section>
+        <div class="events-card">
+          <div class="events-head">
+            <h2>Status</h2>
+            <button type="button" class="btn ghost small" id="btn-clear">Clear</button>
+          </div>
+          <ul id="events" class="events"></ul>
+        </div>
+      </section>
+
+      <section class="view" id="view-report">
+        <div class="report-toolbar">
+          <h2>Findings report</h2>
+          <button type="button" class="btn ghost small" id="btn-refresh-report">Refresh</button>
+        </div>
+        <div class="report-frame-wrap">
+          <iframe id="report-frame" title="Vulnerability report" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+          <div class="report-empty" id="report-empty">No report yet. Run a scan to see results here.</div>
+        </div>
+      </section>
+    </main>
   </div>
   <script src="renderer.js"></script>
 </body>

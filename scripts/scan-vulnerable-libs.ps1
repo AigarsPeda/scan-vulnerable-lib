@@ -26,7 +26,10 @@ param(
   [int]$MaxProjectsPerEco = 80,
   [switch]$HighOnly,
   [switch]$SkipCache,
-  [switch]$SkipOsv
+  [switch]$SkipOsv,
+  [string]$OutputDir = '',
+  [switch]$GuiMode,
+  [switch]$NoOpen
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -78,11 +81,29 @@ function Get-UserDesktop {
 }
 
 $desktop = Get-UserDesktop
-# ONE fixed HTML file for progress + final report (always overwrite this same path)
-$outHtml = Join-Path $desktop 'vulnerable-libs-report.html'
+# Report location: -OutputDir (GUI/app) or Desktop (standalone)
+if ($OutputDir) {
+  if (-not (Test-Path -LiteralPath $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+  }
+  $outHtml = Join-Path $OutputDir 'vulnerable-libs-report.html'
+} else {
+  $outHtml = Join-Path $desktop 'vulnerable-libs-report.html'
+}
 $logPath = $outHtml
+$script:GuiMode = [bool]$GuiMode
+$script:GuiPaused = $false
+$script:progressJsonPath = Join-Path (Split-Path -Parent $outHtml) 'scan-progress.json'
+$script:controlJsonPath = Join-Path (Split-Path -Parent $outHtml) 'scan-control.json'
+if ($script:GuiMode) {
+  try {
+    $utf8Ctrl = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($script:controlJsonPath, '{"action":"run"}', $utf8Ctrl)
+  } catch {}
+}
 $script:logEntries = New-Object System.Collections.Generic.List[object]
 $script:lastHtmlFlush = [datetime]::MinValue
+$script:lastProgressJsonWrite = [datetime]::MinValue
 
 # Remove old separate progress file from earlier versions (avoid confusion)
 $legacyProgress = Join-Path $desktop 'vulnerable-libs-progress.html'
@@ -133,6 +154,66 @@ function Initialize-ProgressLine {
   }
 }
 
+function Write-GuiProgressFile {
+  try {
+    $obj = [ordered]@{
+      percent = [int]$script:percent
+      phase   = [string]$script:phase
+      detail  = [string]$script:detail
+      report  = [string]$outHtml
+      paused  = [bool]$script:GuiPaused
+      updated = (Get-Date).ToString('o')
+    }
+    $json = ($obj | ConvertTo-Json -Compress)
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($script:progressJsonPath, $json, $utf8)
+  } catch {}
+}
+
+function Get-GuiControlAction {
+  if (-not $script:GuiMode) { return 'run' }
+  try {
+    if (-not (Test-Path -LiteralPath $script:controlJsonPath)) { return 'run' }
+    $raw = [System.IO.File]::ReadAllText($script:controlJsonPath)
+    if (-not $raw) { return 'run' }
+    $c = $raw | ConvertFrom-Json
+    $a = [string]$c.action
+    if ($a -in @('run', 'pause', 'stop')) { return $a }
+  } catch {}
+  return 'run'
+}
+
+function Wait-IfGuiPaused {
+  if (-not $script:GuiMode) { return }
+  while ($true) {
+    $action = Get-GuiControlAction
+    if ($action -eq 'stop') {
+      Write-Output 'LOG|warn|Stop requested'
+      Write-Output ("DONE|STOPPED|{0}" -f $outHtml)
+      $script:percent = [int]$script:percent
+      $script:phase = 'STOPPED'
+      $script:detail = 'Stopped by user'
+      Write-GuiProgressFile
+      exit 0
+    }
+    if ($action -ne 'pause') {
+      if ($script:GuiPaused) {
+        $script:GuiPaused = $false
+        Write-Output 'LOG|meta|Scan resumed'
+        Write-Output ("PROGRESS|{0}|{1}|{2}" -f $script:percent, ($script:phase -replace '\|', '/'), 'Resumed')
+        Write-GuiProgressFile
+      }
+      return
+    }
+    $script:GuiPaused = $true
+    $script:phase = 'Paused'
+    $script:detail = 'Scan paused - press Resume to continue'
+    Write-GuiProgressFile
+    Write-Output ("PROGRESS|{0}|Paused|Waiting for resume..." -f $script:percent)
+    Start-Sleep -Milliseconds 400
+  }
+}
+
 function Show-LiveProgress {
   param(
     [int]$Percent,
@@ -140,9 +221,13 @@ function Show-LiveProgress {
     [string]$Current
   )
 
-  # throttle paints so terminal isn't flooded (still looks live)
+  # Cooperative pause/stop for Electron GUI
+  Wait-IfGuiPaused
+
+  # throttle paints so terminal/GUI isn't flooded
   $now = Get-Date
-  if (($now - $script:lastUiPaint).TotalMilliseconds -lt 80 -and $Percent -lt 99) {
+  $minMs = if ($script:GuiMode) { 200 } else { 80 }
+  if (($now - $script:lastUiPaint).TotalMilliseconds -lt $minMs -and $Percent -lt 99) {
     return
   }
   $script:lastUiPaint = $now
@@ -154,38 +239,43 @@ function Show-LiveProgress {
   $spin = $script:spinChars[$script:spinIdx]
   $pct = $script:percent
 
-  $width = Get-ConsoleWidth
-  $maxLen = [Math]::Max(20, $width - 1)
+  if ($script:GuiMode) {
+    # Machine-readable line for Electron + JSON file for reliable progress bar
+    Write-Output ("PROGRESS|{0}|{1}|{2}" -f $pct, ($Status -replace '\|', '/'), ($Current -replace '[\r\n\|]', ' '))
+    if (($now - $script:lastProgressJsonWrite).TotalMilliseconds -ge 250 -or $Percent -ge 99) {
+      Write-GuiProgressFile
+      $script:lastProgressJsonWrite = $now
+    }
+  } else {
+    $width = Get-ConsoleWidth
+    $maxLen = [Math]::Max(20, $width - 1)
+    $shown = $Current
+    $prefix = (" {0} [{1,3}%] {2} | " -f $spin, $pct, $Status)
+    $room = $maxLen - $prefix.Length
+    if ($room -lt 10) { $room = 10 }
+    if ($shown.Length -gt $room) {
+      $shown = '...' + $shown.Substring($shown.Length - ($room - 3))
+    }
+    $text = ($prefix + $shown)
+    if ($text.Length -gt $maxLen) { $text = $text.Substring(0, $maxLen) }
+    $text = $text.PadRight($maxLen)
 
-  # Compact text so it NEVER wraps (wrapping is what creates "millions of lines")
-  $shown = $Current
-  $prefix = (" {0} [{1,3}%] {2} | " -f $spin, $pct, $Status)
-  $room = $maxLen - $prefix.Length
-  if ($room -lt 10) { $room = 10 }
-  if ($shown.Length -gt $room) {
-    $shown = '...' + $shown.Substring($shown.Length - ($room - 3))
+    try {
+      if ($script:progressTop -lt 0) { Initialize-ProgressLine }
+      $left = [Console]::CursorLeft
+      $top = [Console]::CursorTop
+      [Console]::SetCursorPosition(0, $script:progressTop)
+      [Console]::Write($text)
+      $below = [Math]::Min([Console]::BufferHeight - 1, $script:progressTop + 1)
+      [Console]::SetCursorPosition(0, [Math]::Max($below, $top))
+    } catch {
+      Write-Host ("`r" + $text) -NoNewline
+    }
   }
-  $text = ($prefix + $shown)
-  if ($text.Length -gt $maxLen) { $text = $text.Substring(0, $maxLen) }
-  $text = $text.PadRight($maxLen)
 
-  try {
-    if ($script:progressTop -lt 0) { Initialize-ProgressLine }
-    $left = [Console]::CursorLeft
-    $top = [Console]::CursorTop
-    [Console]::SetCursorPosition(0, $script:progressTop)
-    [Console]::Write($text)
-    # put cursor back under the progress line so later Write-Log goes below
-    $below = [Math]::Min([Console]::BufferHeight - 1, $script:progressTop + 1)
-    [Console]::SetCursorPosition(0, [Math]::Max($below, $top))
-  } catch {
-    # last-resort fallback (may wrap in broken hosts)
-    Write-Host ("`r" + $text) -NoNewline
-  }
-
-  # Keep ONE live status for HTML (do not spam Activity with spinner ticks).
-  # Refresh the progress page periodically while scanning.
-  if (-not $script:lastHtmlFlush -or ($now - $script:lastHtmlFlush).TotalSeconds -ge 15) {
+  # Refresh HTML progress periodically while scanning
+  $htmlEvery = if ($script:GuiMode) { 8 } else { 15 }
+  if (-not $script:lastHtmlFlush -or ($now - $script:lastHtmlFlush).TotalSeconds -ge $htmlEvery) {
     Save-ProgressHtml
     $script:lastHtmlFlush = $now
   }
@@ -831,19 +921,23 @@ function Write-Log([string]$msg, [string]$color = 'Gray') {
   if ($color -eq 'Yellow') { $kind = 'warn' }
   if ($msg -match '^\s+\S+.*sourceFiles~|projects/manifests=') { $kind = 'lang' }
 
-  $line = "$(Get-Date -Format 'HH:mm:ss')  $msg"
-  try {
-    if ($script:progressTop -ge 0) {
-      $below = [Math]::Min([Console]::BufferHeight - 1, $script:progressTop + 1)
-      [Console]::SetCursorPosition(0, $below)
+  if ($script:GuiMode) {
+    Write-Output ("LOG|{0}|{1}" -f $kind, ($msg -replace '[\r\n]', ' '))
+  } else {
+    $line = "$(Get-Date -Format 'HH:mm:ss')  $msg"
+    try {
+      if ($script:progressTop -ge 0) {
+        $below = [Math]::Min([Console]::BufferHeight - 1, $script:progressTop + 1)
+        [Console]::SetCursorPosition(0, $below)
+      }
+    } catch {}
+    Write-Host $line -ForegroundColor $color
+    try {
+      $script:progressTop = [Console]::CursorTop
+      [Console]::WriteLine((' ' * ([Math]::Max(1, (Get-ConsoleWidth) - 1))))
+    } catch {
+      $script:progressTop = -1
     }
-  } catch {}
-  Write-Host $line -ForegroundColor $color
-  try {
-    $script:progressTop = [Console]::CursorTop
-    [Console]::WriteLine((' ' * ([Math]::Max(1, (Get-ConsoleWidth) - 1))))
-  } catch {
-    $script:progressTop = -1
   }
   Add-LogEntry -Message $msg -Kind $kind
 }
@@ -1351,15 +1445,22 @@ if ($Drive.Count -eq 0) {
 $script:logEntries.Clear()
 Add-LogEntry -Message 'Scan started' -Kind 'phase'
 Save-ProgressHtml
-Write-Host ''
-Write-Host '============================================================' -ForegroundColor Green
-Write-Host '  MULTI-LANGUAGE VULNERABLE LIBRARY SCANNER' -ForegroundColor Green
-Write-Host ("  Platform: {0}" -f $script:OsLabel) -ForegroundColor Green
-Write-Host '============================================================' -ForegroundColor Green
-Write-Log "Roots: $($roots -join ', ')" 'White'
-Write-Log "HTML report: $outHtml" 'White'
-Write-Host 'Progress stays on ONE line below (spinner + %). Please wait...' -ForegroundColor DarkGray
-Initialize-ProgressLine
+if ($script:GuiMode) {
+  Write-Output 'LOG|phase|Scan started'
+  Write-Output ("LOG|info|Platform: {0}" -f $script:OsLabel)
+  Write-Output ("LOG|info|HTML report: {0}" -f $outHtml)
+  Write-GuiProgressFile
+} else {
+  Write-Host ''
+  Write-Host '============================================================' -ForegroundColor Green
+  Write-Host '  MULTI-LANGUAGE VULNERABLE LIBRARY SCANNER' -ForegroundColor Green
+  Write-Host ("  Platform: {0}" -f $script:OsLabel) -ForegroundColor Green
+  Write-Host '============================================================' -ForegroundColor Green
+  Write-Log "Roots: $($roots -join ', ')" 'White'
+  Write-Log "HTML report: $outHtml" 'White'
+  Write-Host 'Progress stays on ONE line below (spinner + %). Please wait...' -ForegroundColor DarkGray
+  Initialize-ProgressLine
+}
 Show-LiveProgress -Percent 1 -Status 'Phase 1/4: Detecting languages' -Current 'Starting...'
 
 # =============================================================================
@@ -2642,7 +2743,7 @@ try {
 } catch {}
 
 $openedHtml = $false
-if ($reportOk) {
+if ($reportOk -and -not $script:GuiMode -and -not $NoOpen) {
   try {
     $openedHtml = [bool](Open-ReportFile $outHtml)
   } catch {
@@ -2650,17 +2751,25 @@ if ($reportOk) {
   }
 }
 
-Write-Host ''
-if ($reportOk) {
-  Write-Host 'Finished: SUCCESS' -ForegroundColor Green
-  if ($openedHtml) {
-    Write-Host "Opening HTML report: $outHtml" -ForegroundColor Green
-  } else {
-    Write-Host "HTML report saved (could not auto-open): $outHtml" -ForegroundColor Yellow
-  }
+if ($script:GuiMode) {
+  $script:percent = 100
+  $script:phase = if ($reportOk) { 'DONE' } else { 'FAILED' }
+  $script:detail = if ($reportOk) { 'Scan finished' } else { 'HTML report write failed' }
+  Write-GuiProgressFile
+  Write-Output ("DONE|{0}|{1}" -f $(if ($reportOk) { 'SUCCESS' } else { 'FAILED' }), $outHtml)
 } else {
-  Write-Host 'Finished: FAILED' -ForegroundColor Red
-  Write-Host 'Could not write the HTML report.' -ForegroundColor Red
+  Write-Host ''
+  if ($reportOk) {
+    Write-Host 'Finished: SUCCESS' -ForegroundColor Green
+    if ($openedHtml) {
+      Write-Host "Opening HTML report: $outHtml" -ForegroundColor Green
+    } else {
+      Write-Host "HTML report saved (could not auto-open): $outHtml" -ForegroundColor Yellow
+    }
+  } else {
+    Write-Host 'Finished: FAILED' -ForegroundColor Red
+    Write-Host 'Could not write the HTML report.' -ForegroundColor Red
+  }
 }
 
 $toastTitle = if (-not $reportOk) {
@@ -2677,7 +2786,9 @@ $toastText  = if (-not $reportOk) {
 } else {
   "critical=$critical high=$high. Opening HTML report."
 }
-Show-UserNotification -title $toastTitle -text $toastText
+if (-not $script:GuiMode) {
+  Show-UserNotification -title $toastTitle -text $toastText
+}
 Add-LogEntry -Message $(if ($reportOk) { 'DONE' } else { 'FAILED to write HTML report' }) -Kind $(if ($reportOk) { 'done' } else { 'warn' })
 $script:percent = 100
 $script:phase = if ($reportOk) { 'DONE' } else { 'FAILED' }

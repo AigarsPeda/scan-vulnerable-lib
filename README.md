@@ -23,19 +23,20 @@ npm start
 
 ## What it does
 
-- Starts `scripts/scan-vulnerable-libs.ps1` with options from the UI
-- Streams live console output
-- Opens `~/Desktop/vulnerable-libs-report.html` when the scan finishes
+- Runs the bundled scanner: `scripts/scan-vulnerable-libs.ps1`
+- Shows a **progress bar** and status inside the app (no terminal needed)
+- Writes the HTML report into the **app data folder** (not Desktop)
+- Displays the **report inside the app** (Report tab)
 
 ## Options in the UI
 
 | Option | Meaning |
 |--------|---------|
 | High / Critical only | Passes `-HighOnly` |
-| Skip package caches | Passes `-SkipCache` |
-| Skip OSV API fallback | Passes `-SkipOsv` |
-| Max projects per ecosystem | Passes `-MaxProjectsPerEco` |
-| Optional root path / drive | Passes `-Drive` (folder or Windows drive letter) |
+| Skip caches | Passes `-SkipCache` |
+| Skip OSV API | Passes `-SkipOsv` |
+| Max projects / ecosystem | Passes `-MaxProjectsPerEco` |
+| Optional root folder | Passes `-Drive` |
 
 ## Project layout
 
@@ -43,11 +44,12 @@ npm start
 scan-vulnerable-lib/
   electron/          # Electron main + preload
   src/               # UI (HTML/CSS/JS)
-  scripts/           # Shared scanner (.ps1) for Win + Mac
+  scripts/           # Bundled scanner (.ps1) for Win + Mac
   package.json
 ```
 
 ## Notes
 
-- Keep `scripts/scan-vulnerable-libs.ps1` in sync if you change the Desktop copy.
-- On macOS the app looks for `pwsh` on your PATH (Homebrew install recommended).
+- On macOS install PowerShell 7 (`pwsh`) via https://aka.ms/powershell
+- Use **Open data folder** in the UI to find the generated report files
+- Standalone script still supports Desktop output when run without `-GuiMode`
