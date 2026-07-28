@@ -27,6 +27,9 @@ export function useScan() {
   const [phase, setPhase] = useState('Ready')
   const [detail, setDetail] = useState('Configure options and start a scan.')
   const [percent, setPercent] = useState(0)
+  const [ecoLabel, setEcoLabel] = useState('')
+  const [ecoCurrent, setEcoCurrent] = useState(0)
+  const [ecoTotal, setEcoTotal] = useState(0)
   const [events, setEvents] = useState<StatusEvent[]>([])
   const [findings, setFindings] = useState<LiveFinding[]>([])
   const [reportFindings, setReportFindings] = useState<ReportFinding[]>([])
@@ -97,6 +100,9 @@ export function useScan() {
     setFindings([])
     setReportFindings([])
     setFindingCount(0)
+    setEcoLabel('')
+    setEcoCurrent(0)
+    setEcoTotal(0)
   }, [])
 
   const reloadFindings = useCallback(async () => {
@@ -142,7 +148,7 @@ export function useScan() {
       fix: '',
       hasFix: Boolean(payload.hasFix),
       advisory: '',
-      isCache: /cache/i.test(pathValue),
+      isCache: Boolean(payload.isCache) || /cache/i.test(pathValue),
       source: '',
     }
     setReportFindings((prev) => {
@@ -204,6 +210,11 @@ export function useScan() {
       if (typeof payload.detail === 'string') setDetail(payload.detail || ' ')
       if (typeof payload.findingCount === 'number') {
         setFindingCount((c) => (payload.findingCount! > c ? payload.findingCount! : c))
+      }
+      if (typeof payload.eco === 'string' && payload.eco) {
+        setEcoLabel(payload.eco)
+        if (typeof payload.ecoCurrent === 'number') setEcoCurrent(payload.ecoCurrent)
+        if (typeof payload.ecoTotal === 'number') setEcoTotal(payload.ecoTotal)
       }
 
       if (!live) return
@@ -443,6 +454,9 @@ export function useScan() {
     setPercent(0)
     setPhase('STOPPED')
     setDetail('Stopped by user')
+    setEcoLabel('')
+    setEcoCurrent(0)
+    setEcoTotal(0)
     setScanState('idle')
     setStatusLabel('Stopped')
     setStatusTone('error')
@@ -536,6 +550,23 @@ export function useScan() {
     [addEvent]
   )
 
+  const openFindingPath = useCallback(
+    async (targetPath: string) => {
+      const res = await window.scannerApi.openPath(targetPath)
+      if (!res.ok) addEvent('error', res.error || 'Could not open path')
+    },
+    [addEvent]
+  )
+
+  const copyFindingPath = useCallback(
+    async (text: string) => {
+      const res = await window.scannerApi.copyText(text)
+      if (!res.ok) addEvent('error', res.error || 'Copy failed')
+      else addEvent('meta', 'Path copied')
+    },
+    [addEvent]
+  )
+
   return {
     tab,
     selectTab,
@@ -546,6 +577,9 @@ export function useScan() {
     detail,
     percent,
     elapsedMs,
+    ecoLabel,
+    ecoCurrent,
+    ecoTotal,
     events,
     clearEvents,
     findings,
@@ -567,5 +601,7 @@ export function useScan() {
     stopScan,
     pickFolder,
     exportReport,
+    openFindingPath,
+    copyFindingPath,
   }
 }

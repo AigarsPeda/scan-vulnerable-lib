@@ -9,6 +9,8 @@ interface ReportViewProps {
   phase: string
   percent: number
   onExport: (format: ExportFormat) => void
+  onOpenPath: (path: string) => void
+  onCopyPath: (path: string) => void
 }
 
 const EXPORTS: ExportFormat[] = ['json', 'txt', 'csv', 'md', 'html']
@@ -23,6 +25,16 @@ const LABELS: Record<ExportFormat, string> = {
 
 type KindFilter = 'all' | 'project' | 'cache'
 type SevFilter = 'all' | 'critical' | 'high' | 'medium' | 'low'
+type FixFilter = 'all' | 'fix' | 'nofix'
+
+const SEV_RANK: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  moderate: 2,
+  low: 3,
+  unknown: 4,
+}
 
 function folderLabel(pathValue: string): string {
   if (!pathValue) return '(unknown)'
@@ -30,9 +42,18 @@ function folderLabel(pathValue: string): string {
   return parts[parts.length - 1] || pathValue
 }
 
+function sortBySeverity(a: ReportFinding, b: ReportFinding): number {
+  const ra = SEV_RANK[a.severity] ?? 5
+  const rb = SEV_RANK[b.severity] ?? 5
+  if (ra !== rb) return ra - rb
+  return a.packageName.localeCompare(b.packageName)
+}
+
 export function ReportView(props: ReportViewProps) {
   const [kind, setKind] = useState<KindFilter>('all')
   const [sev, setSev] = useState<SevFilter>('all')
+  const [eco, setEco] = useState('all')
+  const [fix, setFix] = useState<FixFilter>('all')
   const [query, setQuery] = useState('')
   const [projectPath, setProjectPath] = useState('all')
 
@@ -45,6 +66,15 @@ export function ReportView(props: ReportViewProps) {
       else if (f.severity === 'low') c.low++
     }
     return c
+  }, [props.findings])
+
+  const ecosystems = useMemo(() => {
+    const set = new Set<string>()
+    for (const f of props.findings) {
+      const e = (f.ecosystem || '').trim()
+      if (e) set.add(e)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [props.findings])
 
   const projectOptions = useMemo(() => {
@@ -75,6 +105,8 @@ export function ReportView(props: ReportViewProps) {
     projectPath === 'all' || projectOptions.some((p) => p.path === projectPath)
       ? projectPath
       : 'all'
+  const selectedEco =
+    eco === 'all' || ecosystems.includes(eco) ? eco : 'all'
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -84,6 +116,9 @@ export function ReportView(props: ReportViewProps) {
       if (kind === 'project' && f.isCache) continue
       if (kind === 'cache' && !f.isCache) continue
       if (selectedProject !== 'all' && (f.path || '(unknown)') !== selectedProject) continue
+      if (selectedEco !== 'all' && (f.ecosystem || '') !== selectedEco) continue
+      if (fix === 'fix' && !f.hasFix) continue
+      if (fix === 'nofix' && f.hasFix) continue
       if (sev !== 'all' && f.severity !== sev && !(sev === 'medium' && f.severity === 'moderate')) continue
       if (q) {
         const hay = `${f.packageName} ${f.version} ${f.title} ${f.path} ${f.advisory} ${f.ecosystem}`.toLowerCase()
@@ -99,9 +134,9 @@ export function ReportView(props: ReportViewProps) {
       path,
       name: folderLabel(path),
       isCache: items.some((i) => i.isCache),
-      items,
+      items: [...items].sort(sortBySeverity),
     }))
-  }, [props.findings, kind, sev, query, selectedProject])
+  }, [props.findings, kind, sev, query, selectedProject, selectedEco, fix])
 
   const visibleCount = groups.reduce((n, g) => n + g.items.length, 0)
   const live = props.scanState === 'running' || props.scanState === 'paused'
@@ -214,6 +249,45 @@ export function ReportView(props: ReportViewProps) {
               </button>
             ))}
           </div>
+          {(ecosystems.length > 0 || props.findings.length > 0) && (
+            <div className="filter-pills">
+              <button
+                type="button"
+                className={`filter-pill${selectedEco === 'all' ? ' active' : ''}`}
+                onClick={() => setEco('all')}
+              >
+                ALL ECOSYSTEMS
+              </button>
+              {ecosystems.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={`filter-pill${selectedEco === name ? ' active' : ''}`}
+                  onClick={() => setEco(name)}
+                >
+                  {name.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="filter-pills">
+            {(
+              [
+                ['all', 'ALL FIXES'],
+                ['fix', 'HAS FIX'],
+                ['nofix', 'NO FIX'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`filter-pill fix-${value}${fix === value ? ' active' : ''}`}
+                onClick={() => setFix(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="report-list">
@@ -229,9 +303,31 @@ export function ReportView(props: ReportViewProps) {
             groups.map((group) => (
               <article key={group.path} className={`report-group${group.isCache ? ' cache' : ''}`}>
                 <header className="report-group-head">
-                  <div className="report-group-label">
-                    {group.isCache ? 'CACHE' : 'PROJECT'} · {group.items.length} finding
-                    {group.items.length === 1 ? '' : 's'}
+                  <div className="report-group-top">
+                    <div className="report-group-label">
+                      {group.isCache ? 'CACHE' : 'PROJECT'} · {group.items.length} finding
+                      {group.items.length === 1 ? '' : 's'}
+                    </div>
+                    {group.path && group.path !== '(unknown)' && (
+                      <div className="path-actions">
+                        <button
+                          type="button"
+                          className="btn ghost tiny"
+                          title="Open folder"
+                          onClick={() => props.onOpenPath(group.path)}
+                        >
+                          Open
+                        </button>
+                        <button
+                          type="button"
+                          className="btn ghost tiny"
+                          title="Copy path"
+                          onClick={() => props.onCopyPath(group.path)}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <h3>{group.name}</h3>
                   <div className="report-group-path">{group.path}</div>

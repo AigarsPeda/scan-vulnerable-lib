@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, dialog, Menu, clipboard } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -283,6 +283,7 @@ ipcMain.handle('get-scan-runtime', async () => {
       title: f.Title || '',
       folder: f.Path || '',
       hasFix: Boolean(f.HasFix),
+      isCache: Boolean(f.IsCache),
       count: rows.length,
     }))
   const action = readControlAction()
@@ -508,6 +509,36 @@ ipcMain.handle('reveal-data', async () => {
   return { ok: true, path: dir }
 })
 
+ipcMain.handle('open-path', async (_event, targetPath: string) => {
+  try {
+    if (!targetPath || typeof targetPath !== 'string') {
+      return { ok: false, error: 'No path provided.' }
+    }
+    let p = targetPath
+    if (!fs.existsSync(p)) {
+      // If a file path was passed, try parent folder
+      const parent = path.dirname(p)
+      if (fs.existsSync(parent)) p = parent
+      else return { ok: false, error: 'Path not found.' }
+    }
+    const st = fs.statSync(p)
+    const openTarget = st.isDirectory() ? p : path.dirname(p)
+    await shell.openPath(openTarget)
+    return { ok: true, path: openTarget }
+  } catch (err) {
+    return { ok: false, error: String(err) }
+  }
+})
+
+ipcMain.handle('copy-text', async (_event, text: string) => {
+  try {
+    clipboard.writeText(String(text || ''))
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String(err) }
+  }
+})
+
 ipcMain.handle('pick-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openDirectory'],
@@ -617,6 +648,16 @@ function handleStdoutLine(line: string): void {
       folder: parts[5] || '',
       hasFix: parts[6] === '1',
       count: Number(parts[7] || 0),
+      isCache: parts[8] === '1',
+    })
+    return
+  }
+  if (text.startsWith('ECOSTATUS|')) {
+    const parts = text.split('|')
+    send('scan-progress', {
+      eco: parts[1] || '',
+      ecoCurrent: Number(parts[2] || 0),
+      ecoTotal: Number(parts[3] || 0),
     })
     return
   }

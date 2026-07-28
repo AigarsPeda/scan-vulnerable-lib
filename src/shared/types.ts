@@ -49,6 +49,9 @@ export interface ScanProgress {
   paused?: boolean
   findingCount?: number
   report?: string
+  eco?: string
+  ecoCurrent?: number
+  ecoTotal?: number
 }
 
 export interface ScanFinding {
@@ -59,6 +62,7 @@ export interface ScanFinding {
   folder?: string
   hasFix?: boolean
   count?: number
+  isCache?: boolean
 }
 
 export interface ReportFinding {
@@ -151,6 +155,8 @@ export interface ScannerApi {
   resumeScan: () => Promise<OkResult>
   stopScan: () => Promise<OkResult>
   revealData: () => Promise<OkResult>
+  openPath: (targetPath: string) => Promise<OkResult>
+  copyText: (text: string) => Promise<OkResult>
   pickFolder: () => Promise<string | null>
   onScanLog: (cb: (payload: ScanLog) => void) => () => void
   onScanStatus: (cb: (payload: ScanStatus) => void) => () => void

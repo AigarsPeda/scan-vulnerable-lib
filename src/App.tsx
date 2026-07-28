@@ -68,6 +68,9 @@ export default function App() {
                 events={scan.events}
                 scanState={scan.scanState}
                 elapsedMs={scan.elapsedMs}
+                ecoLabel={scan.ecoLabel}
+                ecoCurrent={scan.ecoCurrent}
+                ecoTotal={scan.ecoTotal}
                 onClearEvents={scan.clearEvents}
               />
             ) : (
@@ -78,6 +81,8 @@ export default function App() {
                 phase={scan.phase}
                 percent={scan.percent}
                 onExport={scan.exportReport}
+                onOpenPath={scan.openFindingPath}
+                onCopyPath={scan.copyFindingPath}
               />
             )}
           </motion.div>

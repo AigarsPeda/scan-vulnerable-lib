@@ -5,7 +5,7 @@ One GUI for **Windows and macOS**. React + TypeScript UI (electron-vite) that ru
 ## Requirements
 
 - [Node.js](https://nodejs.org/) 18+
-- **Windows:** PowerShell 5.1+ (or PowerShell 7 `pwsh`)
+- **Windows:** PowerShell 5.1+ (or PowerShell 7 `pwsh` — parallel project audits need PS7+)
 - **macOS:** [PowerShell 7](https://aka.ms/powershell) (`pwsh`)
 
 ## Install
@@ -21,15 +21,25 @@ npm install
 npm run dev      # development (hot reload)
 npm start        # preview production build
 npm run build    # compile main/preload/renderer
+npm run typecheck
 ```
 
 ## What it does
 
 - Runs the bundled scanner: `scripts/scan-vulnerable-libs.ps1`
-- Shows live **progress**, **findings**, and status inside the app
-- Start / Pause / Resume / Stop controls
-- Writes working report data under the **app data folder**
-- **Report** tab (HTML viewer) + **export** JSON / TXT / CSV / Markdown / HTML
+- Live **Progress** (percent, item counts, per-ecosystem bar, elapsed time) and streaming findings
+- Native **Report** tab (not an HTML iframe) with live updates from `findings.json`
+- Report filters: severity, project/cache, ecosystem, has-fix; Open / Copy path per project
+- Start / Pause / Resume / Stop (Stop resets progress immediately; options stay locked while scanning)
+- Working files under the **app data folder**
+- **Export** JSON / TXT / CSV / Markdown / HTML (disabled while a scan is running)
+
+### Scanner performance notes
+
+- OSV in-memory cache, retries, and `/v1/querybatch`
+- Skips OSV when a native audit already ran (npm/yarn, `dotnet list`, pip-audit)
+- Finding dedupe + native-command timeouts
+- On PowerShell 7+, capped parallel project audits (degree 3) for npm / NuGet / PyPI
 
 ## Options in the UI
 
@@ -56,5 +66,5 @@ scan-vulnerable-lib/
 ## Notes
 
 - On macOS install PowerShell 7 (`pwsh`) via https://aka.ms/powershell
-- Use **Open data folder** in the UI to find working report files
+- Working files live under the Electron app data folder (`findings.json`, progress, etc.)
 - Standalone script still supports Desktop output when run without `-GuiMode`

@@ -129,12 +129,22 @@ if ((Test-Path -LiteralPath $legacyProgress) -and ($legacyProgress -ne $outHtml)
 $skipRegex = [regex]'(?i)([\\/](Windows|WinSxS|\$Recycle\.Bin|System Volume Information|Recovery|PerfLogs|Windows\.old|Google[\\/]Chrome|Microsoft[\\/]Edge|Mozilla[\\/]Firefox|BraveSoftware|Opera Software|INetCache|node_modules[\\/]\.cache|AppData|Program Files|Program Files \(x86\)|ProgramData|Applications|Library|System|private|cores|\.Trash|Volumes[\\/]com\.apple|Time Machine|Backups\.backupdb|\.(cursor|vscode|git|nuget|npm|yarn|cache|codex|claude|agents|gemini|copilot)|Temp|Packages|Package Cache)([\\/]|$))'
 
 $findings = New-Object System.Collections.Generic.List[object]
+$script:findingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+$script:findingsLock = New-Object object
+$script:osvCache = @{}
+$script:osvQueue = New-Object System.Collections.Generic.List[object]
+$script:osvDegraded = $false
+$script:osvBatchSize = 80
+$script:nativeCommandTimeoutSec = 300
+$script:parallelDegree = if ($PSVersionTable.PSVersion.Major -ge 7) { 3 } else { 1 }
 $detected = [ordered]@{}
 $stats = [ordered]@{
   FilesSampled = 0
   Projects = 0
   CachePackagesChecked = 0
   OsvQueries = 0
+  OsvCacheHits = 0
+  OsvBatchCalls = 0
 }
 
 $script:phase = 'Starting'
@@ -1076,6 +1086,16 @@ function Add-Finding {
   if ($HighOnly -and $sev -notin @('high', 'critical')) { return }
 
   $titleClean = Sanitize-DisplayText $Title
+  $dedupeKey = ("{0}|{1}|{2}|{3}|{4}|{5}" -f $Ecosystem, $Package, $Version, $Path, $sev, $titleClean).ToLowerInvariant()
+  $lockTaken = $false
+  try {
+    [System.Threading.Monitor]::Enter($script:findingsLock)
+    $lockTaken = $true
+    if (-not $script:findingKeys.Add($dedupeKey)) { return }
+  } finally {
+    if ($lockTaken) { [System.Threading.Monitor]::Exit($script:findingsLock) }
+  }
+
   $fixInfo = Format-FixAdvice -FixRaw $Fix -Package $Package -Ecosystem $Ecosystem
   $fixText = $fixInfo.Text
   $hasFix = [bool]$fixInfo.HasFix
@@ -1083,19 +1103,27 @@ function Add-Finding {
   $aliasTags = Get-KnownAdvisoryAliases -Package $Package -Title $titleClean -Advisory $Advisory
   $advisoryText = Join-AdvisoryText -Parts (@($Advisory) + @($aliasTags))
 
-  $findings.Add([pscustomobject]@{
-    Ecosystem = $Ecosystem
-    Source    = $Source
-    Severity  = $sev
-    Package   = $Package
-    Version   = $Version
-    Title     = $titleClean
-    Advisory  = $advisoryText
-    Path      = $Path
-    Fix       = $fixText
-    HasFix    = $hasFix
-    IsCache   = $isCache
-  }) | Out-Null
+  $lockTaken = $false
+  try {
+    [System.Threading.Monitor]::Enter($script:findingsLock)
+    $lockTaken = $true
+    $findings.Add([pscustomobject]@{
+      Ecosystem = $Ecosystem
+      Source    = $Source
+      Severity  = $sev
+      Package   = $Package
+      Version   = $Version
+      Title     = $titleClean
+      Advisory  = $advisoryText
+      Path      = $Path
+      Fix       = $fixText
+      HasFix    = $hasFix
+      IsCache   = $isCache
+    }) | Out-Null
+    $findingCountNow = $findings.Count
+  } finally {
+    if ($lockTaken) { [System.Threading.Monitor]::Exit($script:findingsLock) }
+  }
 
   # Keep console on one progress row; details go to HTML progress log
   $folder = Get-ProjectFolderFromPath $Path
@@ -1111,7 +1139,8 @@ function Add-Finding {
     $sTitle = ($titleClean -replace '[\r\n\|]', ' ').Trim()
     $sFolder = ($folder -replace '[\r\n\|]', ' ').Trim()
     $sFix = if ($hasFix) { '1' } else { '0' }
-    Write-Output ("FINDING|{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f $sSev, $sPkg, $sEco, $sTitle, $sFolder, $sFix, $findings.Count)
+    $sCache = if ($isCache) { '1' } else { '0' }
+    Write-Output ("FINDING|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f $sSev, $sPkg, $sEco, $sTitle, $sFolder, $sFix, $findingCountNow, $sCache)
     Write-GuiProgressFile
     # Keep findings.json fresh so the React report stays live
     $nowJson = Get-Date
@@ -1193,10 +1222,13 @@ function Invoke-NativeCommand {
     [Parameter(Mandatory)][string]$Command,
     [string[]]$Arguments = @(),
     [string]$WorkingDirectory = '',
-    [string]$OutFile = ''
+    [string]$OutFile = '',
+    [int]$TimeoutSec = 0
   )
   $wd = if ($WorkingDirectory) { $WorkingDirectory } else { (Get-Location).Path }
   $errFile = if ($OutFile) { "$OutFile.err" } else { $null }
+  $timeout = if ($TimeoutSec -gt 0) { $TimeoutSec } else { [int]$script:nativeCommandTimeoutSec }
+  $timeoutMs = [Math]::Max(1000, $timeout * 1000)
 
   # Windows npm/yarn shims must go through cmd.exe
   $leaf = Split-Path -Leaf $Command
@@ -1214,7 +1246,6 @@ function Invoke-NativeCommand {
       ArgumentList = @('/d', '/c', "$exe $argLine")
       WorkingDirectory = $wd
       NoNewWindow = $true
-      Wait = $true
       PassThru = $true
     }
     if ($OutFile) {
@@ -1225,7 +1256,14 @@ function Invoke-NativeCommand {
       $sp.RedirectStandardError = $script:DevNull
     }
     $p = Start-Process @sp
-    return $(if ($null -ne $p) { $p.ExitCode } else { 1 })
+    if ($null -eq $p) { return 1 }
+    if (-not $p.WaitForExit($timeoutMs)) {
+      try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+      Write-QuietLog "Timed out after ${timeout}s: $exe $argLine"
+      if ($script:GuiMode) { Write-Output ("LOG|warn|Timed out after {0}s: {1}" -f $timeout, $exe) }
+      return 124
+    }
+    return $(if ($null -ne $p.ExitCode) { $p.ExitCode } else { 1 })
   }
 
   # Resolve command path when needed
@@ -1235,33 +1273,88 @@ function Invoke-NativeCommand {
     if ($gc) { $exePath = $gc.Source }
   }
 
-  Push-Location -LiteralPath $wd
+  $sp = @{
+    FilePath = $exePath
+    ArgumentList = $Arguments
+    WorkingDirectory = $wd
+    NoNewWindow = $true
+    PassThru = $true
+  }
+  if ($OutFile) {
+    $sp.RedirectStandardOutput = $OutFile
+    $sp.RedirectStandardError = $(if ($errFile) { $errFile } else { $script:DevNull })
+  } else {
+    $sp.RedirectStandardOutput = $script:DevNull
+    $sp.RedirectStandardError = $script:DevNull
+  }
   try {
-    if ($OutFile) {
-      $output = & $exePath @Arguments 2> $errFile
-      $code = $LASTEXITCODE
-      if ($null -eq $code) { $code = 0 }
-      if ($null -eq $output) {
-        [System.IO.File]::WriteAllText($OutFile, '')
-      } elseif ($output -is [array]) {
-        [System.IO.File]::WriteAllLines($OutFile, [string[]]$output)
-      } else {
-        [System.IO.File]::WriteAllText($OutFile, [string]$output)
-      }
-      return $code
+    $p = Start-Process @sp
+    if ($null -eq $p) { return 1 }
+    if (-not $p.WaitForExit($timeoutMs)) {
+      try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+      Write-QuietLog "Timed out after ${timeout}s: $exePath"
+      if ($script:GuiMode) { Write-Output ("LOG|warn|Timed out after {0}s: {1}" -f $timeout, (Split-Path -Leaf $exePath)) }
+      return 124
     }
-    & $exePath @Arguments 2> $script:DevNull | Out-Null
-    $code = $LASTEXITCODE
-    if ($null -eq $code) { $code = 0 }
-    return $code
+    return $(if ($null -ne $p.ExitCode) { $p.ExitCode } else { 1 })
   } catch {
     if ($OutFile) {
       try { [System.IO.File]::WriteAllText($OutFile, '') } catch {}
     }
     return 1
-  } finally {
-    Pop-Location
   }
+}
+
+function Start-RedirectedProcess {
+  param(
+    [Parameter(Mandatory)][string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory = '',
+    [string]$OutFile = ''
+  )
+  $wd = if ($WorkingDirectory) { $WorkingDirectory } else { (Get-Location).Path }
+  $errFile = if ($OutFile) { "$OutFile.err" } else { $script:DevNull }
+  $leaf = Split-Path -Leaf $FilePath
+  $useCmd = $script:IsWin -and (
+    $FilePath -match '\.(cmd|bat)$' -or
+    $leaf -match '^(npm|yarn|npx)(\.cmd|\.bat)?$'
+  )
+  $sp = @{
+    WorkingDirectory = $wd
+    NoNewWindow = $true
+    PassThru = $true
+  }
+  if ($OutFile) {
+    $sp.RedirectStandardOutput = $OutFile
+    $sp.RedirectStandardError = $errFile
+  } else {
+    $sp.RedirectStandardOutput = $script:DevNull
+    $sp.RedirectStandardError = $script:DevNull
+  }
+  if ($useCmd) {
+    $exe = if ($leaf -match '\.(cmd|bat)$') { $leaf } else { "$leaf.cmd" }
+    $argLine = ($ArgumentList | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+      }) -join ' '
+    $sp.FilePath = 'cmd.exe'
+    $sp.ArgumentList = @('/d', '/c', "$exe $argLine")
+  } else {
+    $sp.FilePath = $FilePath
+    $sp.ArgumentList = $ArgumentList
+  }
+  try { return (Start-Process @sp) } catch { return $null }
+}
+
+function Wait-RedirectedProcess {
+  param($Process, [int]$TimeoutSec = 0)
+  if ($null -eq $Process) { return 1 }
+  $timeout = if ($TimeoutSec -gt 0) { $TimeoutSec } else { [int]$script:nativeCommandTimeoutSec }
+  $timeoutMs = [Math]::Max(1000, $timeout * 1000)
+  if (-not $Process.WaitForExit($timeoutMs)) {
+    try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch {}
+    return 124
+  }
+  return $(if ($null -ne $Process.ExitCode) { $Process.ExitCode } else { 1 })
 }
 
 function Invoke-JsonCommand {
@@ -1274,19 +1367,158 @@ function Invoke-JsonCommand {
   return (Invoke-NativeCommand -Command $FilePath -Arguments $Arguments -WorkingDirectory $WorkingDirectory -OutFile $OutFile)
 }
 
+function Write-OsvDegraded([string]$message) {
+  if (-not $script:osvDegraded) {
+    $script:osvDegraded = $true
+    Write-QuietLog "OSV API degraded: $message"
+    if ($script:GuiMode) { Write-Output ("LOG|warn|OSV API degraded — some checks may be incomplete") }
+  } else {
+    Write-QuietLog "OSV: $message"
+  }
+}
+
+function Get-OsvCacheKey([string]$ecosystem, [string]$name, [string]$version) {
+  return ("{0}|{1}|{2}" -f $ecosystem, $name, $version).ToLowerInvariant()
+}
+
 # -------------------- OSV helpers --------------------
 function Invoke-OsvQuery([string]$ecosystem, [string]$name, [string]$version) {
   if ($SkipOsv) { return @() }
+  $key = Get-OsvCacheKey $ecosystem $name $version
+  if ($script:osvCache.ContainsKey($key)) {
+    $stats.OsvCacheHits++
+    return @($script:osvCache[$key])
+  }
+
   $stats.OsvQueries++
-  try {
-    $body = @{
-      package = @{ name = $name; ecosystem = $ecosystem }
-      version = $version
-    } | ConvertTo-Json -Compress
-    $resp = Invoke-RestMethod -Uri 'https://api.osv.dev/v1/query' -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 25
-    if ($resp.vulns) { return @($resp.vulns) }
-  } catch {}
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $body = @{
+        package = @{ name = $name; ecosystem = $ecosystem }
+        version = $version
+      } | ConvertTo-Json -Compress -Depth 5
+      $resp = Invoke-RestMethod -Uri 'https://api.osv.dev/v1/query' -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 25
+      $vulns = if ($resp.vulns) { @($resp.vulns) } else { @() }
+      $script:osvCache[$key] = $vulns
+      return $vulns
+    } catch {
+      if ($attempt -ge 3) {
+        Write-OsvDegraded $_.Exception.Message
+        $script:osvCache[$key] = @()
+        return @()
+      }
+      Start-Sleep -Milliseconds (250 * $attempt)
+    }
+  }
   return @()
+}
+
+function Invoke-OsvQueryBatch {
+  param([object[]]$Items)
+  if ($SkipOsv -or $Items.Count -eq 0) { return }
+
+  $pending = New-Object System.Collections.Generic.List[object]
+  foreach ($it in $Items) {
+    $key = Get-OsvCacheKey $it.OsvEco $it.Package $it.Version
+    if ($script:osvCache.ContainsKey($key)) {
+      $stats.OsvCacheHits++
+      $it.Vulns = @($script:osvCache[$key])
+    } else {
+      [void]$pending.Add($it)
+    }
+  }
+
+  for ($i = 0; $i -lt $pending.Count; $i += $script:osvBatchSize) {
+    $chunk = @($pending | Select-Object -Skip $i -First $script:osvBatchSize)
+    $queries = @()
+    foreach ($c in $chunk) {
+      $queries += @{
+        package = @{ name = $c.Package; ecosystem = $c.OsvEco }
+        version = $c.Version
+      }
+    }
+    $stats.OsvBatchCalls++
+    $stats.OsvQueries += $chunk.Count
+    $ok = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+      try {
+        $body = @{ queries = $queries } | ConvertTo-Json -Compress -Depth 6
+        $resp = Invoke-RestMethod -Uri 'https://api.osv.dev/v1/querybatch' -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 60
+        $results = @($resp.results)
+        for ($ri = 0; $ri -lt $chunk.Count; $ri++) {
+          $vulns = @()
+          if ($ri -lt $results.Count -and $results[$ri].vulns) {
+            $vulns = @($results[$ri].vulns)
+          }
+          $key = Get-OsvCacheKey $chunk[$ri].OsvEco $chunk[$ri].Package $chunk[$ri].Version
+          $script:osvCache[$key] = $vulns
+          $chunk[$ri].Vulns = $vulns
+        }
+        $ok = $true
+        break
+      } catch {
+        if ($attempt -ge 3) {
+          Write-OsvDegraded $_.Exception.Message
+          foreach ($c in $chunk) {
+            $key = Get-OsvCacheKey $c.OsvEco $c.Package $c.Version
+            $script:osvCache[$key] = @()
+            $c.Vulns = @()
+          }
+        } else {
+          Start-Sleep -Milliseconds (400 * $attempt)
+        }
+      }
+    }
+    if (-not $ok) { continue }
+  }
+}
+
+function Emit-OsvFindingFromItem($item) {
+  $vulns = @($item.Vulns)
+  if ($vulns.Count -eq 0) { return }
+  $sev = Get-OsvSeverity $vulns
+  $idBits = New-Object System.Collections.Generic.List[string]
+  foreach ($v in $vulns) {
+    if ($v.id) { [void]$idBits.Add([string]$v.id) }
+    foreach ($a in @($v.aliases)) { if ($a) { [void]$idBits.Add([string]$a) } }
+    foreach ($a in @($v.related)) { if ($a) { [void]$idBits.Add([string]$a) } }
+  }
+  $title = ($vulns | ForEach-Object { if ($_.summary) { $_.summary } else { $_.id } } | Select-Object -First 1)
+  $aliases = Get-KnownAdvisoryAliases -Package $item.Package -Title ([string]$title) -Advisory ($idBits -join ', ')
+  $ids = Join-AdvisoryText -Parts (@($idBits) + @($aliases))
+  Add-Finding -Ecosystem $item.EcoLabel -Source $item.Source -Severity $sev -Package $item.Package -Version $item.Version -Title $title -Advisory $ids -Path $item.Path -Fix 'Upgrade to a patched version (see advisory)'
+}
+
+function Flush-OsvQueue {
+  if ($script:osvQueue.Count -eq 0) { return }
+  $items = @($script:osvQueue)
+  $script:osvQueue.Clear()
+  Invoke-OsvQueryBatch -Items $items
+  foreach ($it in $items) { Emit-OsvFindingFromItem $it }
+}
+
+function Add-OsvFindings([string]$ecoLabel, [string]$osvEco, [string]$pkg, [string]$ver, [string]$path, [string]$source) {
+  if ($SkipOsv) { return }
+  $item = [pscustomobject]@{
+    EcoLabel = $ecoLabel
+    OsvEco   = $osvEco
+    Package  = $pkg
+    Version  = $ver
+    Path     = $path
+    Source   = $source
+    Vulns    = @()
+  }
+  $key = Get-OsvCacheKey $osvEco $pkg $ver
+  if ($script:osvCache.ContainsKey($key)) {
+    $stats.OsvCacheHits++
+    $item.Vulns = @($script:osvCache[$key])
+    Emit-OsvFindingFromItem $item
+    return
+  }
+  [void]$script:osvQueue.Add($item)
+  if ($script:osvQueue.Count -ge $script:osvBatchSize) {
+    Flush-OsvQueue
+  }
 }
 
 function Get-OsvSeverity($vulns) {
@@ -1400,22 +1632,6 @@ function Format-AdvisoryHtml {
     }
   }
   return "<div class='$WrapperClass advisory'><div class='adv-label'>Advisories</div><ul class='adv-list'>" + ($lis -join '') + "</ul></div>"
-}
-
-function Add-OsvFindings([string]$ecoLabel, [string]$osvEco, [string]$pkg, [string]$ver, [string]$path, [string]$source) {
-  $vulns = Invoke-OsvQuery -ecosystem $osvEco -name $pkg -version $ver
-  if ($vulns.Count -eq 0) { return }
-  $sev = Get-OsvSeverity $vulns
-  $idBits = New-Object System.Collections.Generic.List[string]
-  foreach ($v in $vulns) {
-    if ($v.id) { [void]$idBits.Add([string]$v.id) }
-    foreach ($a in @($v.aliases)) { if ($a) { [void]$idBits.Add([string]$a) } }
-    foreach ($a in @($v.related)) { if ($a) { [void]$idBits.Add([string]$a) } }
-  }
-  $title = ($vulns | ForEach-Object { if ($_.summary) { $_.summary } else { $_.id } } | Select-Object -First 1)
-  $aliases = Get-KnownAdvisoryAliases -Package $pkg -Title ([string]$title) -Advisory ($idBits -join ', ')
-  $ids = Join-AdvisoryText -Parts (@($idBits) + @($aliases))
-  Add-Finding -Ecosystem $ecoLabel -Source $source -Severity $sev -Package $pkg -Version $ver -Title $title -Advisory $ids -Path $path -Fix 'Upgrade to a patched version (see advisory)'
 }
 
 function Get-NpmCacheRoots {
@@ -1850,6 +2066,10 @@ $bundleCmd  = Get-Cmd 'bundle' @()
 
 Write-QuietLog "Tools: npm=$(!!$npmCmd) yarn=$(!!$yarnCmd) dotnet=$(!!$dotnetCmd) python=$(!!$pythonCmd) pip-audit=$(!!$pipAudit) go=$(!!$goCmd) govulncheck=$(!!$govuln) cargo=$(!!$cargoCmd) composer=$(!!$composer)"
 Show-LiveProgress 20 'Phase 3/4: Auditing libraries' 'Starting audits...'
+if ($script:GuiMode -and $script:parallelDegree -gt 1) {
+  Write-Output ("LOG|info|Parallel audit degree: {0}" -f $script:parallelDegree)
+}
+Write-QuietLog "Parallel degree=$($script:parallelDegree); OSV batch size=$($script:osvBatchSize)"
 
 $ecoList = @($projects.Keys)
 $ecoIndex = 0
@@ -1862,21 +2082,57 @@ foreach ($eco in $ecoList) {
 
   # ----- npm / JS/TS -----
   if ($eco -eq 'npm') {
-    $di = 0
-    foreach ($dir in $dirs) {
-      $di++
-      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
-      Show-LiveProgress $pct 'Phase 3/4: Auditing npm/JS/TS' "[$di/$($dirs.Count)] $dir"
+    $degree = [Math]::Max(1, [int]$script:parallelDegree)
+    $diDone = 0
+    for ($batchStart = 0; $batchStart -lt $dirs.Count; $batchStart += $degree) {
+      $batchEnd = [Math]::Min($batchStart + $degree - 1, $dirs.Count - 1)
+      $batch = @($dirs[$batchStart..$batchEnd])
+      $jobs = New-Object System.Collections.Generic.List[object]
 
-      $ran = $false
-      if ($npmCmd -and ((Test-Path (Join-Path $dir 'package-lock.json')) -or (Test-Path (Join-Path $dir 'node_modules')) -or (Test-Path (Join-Path $dir 'package.json')))) {
-        try {
+      foreach ($dir in $batch) {
+        $diDone++
+        $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $diDone / [Math]::Max(1,$dirs.Count))
+        Show-LiveProgress $pct 'Phase 3/4: Auditing npm/JS/TS' "[$diDone/$($dirs.Count)] $dir"
+        if ($script:GuiMode) { Write-Output ("ECOSTATUS|{0}|{1}|{2}" -f 'npm', $diDone, $dirs.Count) }
+
+        $job = [ordered]@{
+          Dir = $dir; Di = $diDone; Pct = $pct
+          Kind = 'none'; Process = $null; OutFile = $null; ErrFile = $null; Ran = $false
+        }
+
+        if ($npmCmd -and ((Test-Path (Join-Path $dir 'package-lock.json')) -or (Test-Path (Join-Path $dir 'node_modules')) -or (Test-Path (Join-Path $dir 'package.json')))) {
           $tmp = Join-Path $script:TempDir ("audit-npm-{0}.json" -f [guid]::NewGuid().ToString('N'))
-          $err = "$tmp.err"
-          [void](Invoke-NativeCommand -Command $(if ($npmCmd) { $npmCmd } else { 'npm' }) -Arguments @('audit','--json') -WorkingDirectory $dir -OutFile $tmp)
-          if (Test-Path $tmp) {
-            $raw = Get-Content -LiteralPath $tmp -Raw
-            Remove-Item $tmp,$err -Force -ErrorAction SilentlyContinue
+          $p = Start-RedirectedProcess -FilePath $npmCmd -ArgumentList @('audit','--json') -WorkingDirectory $dir -OutFile $tmp
+          $job.Kind = 'npm'; $job.Process = $p; $job.OutFile = $tmp; $job.ErrFile = "$tmp.err"
+        } elseif ($yarnCmd -and (Test-Path (Join-Path $dir 'yarn.lock'))) {
+          $tmp = Join-Path $script:TempDir ("audit-yarn-{0}.json" -f [guid]::NewGuid().ToString('N'))
+          $p = Start-RedirectedProcess -FilePath $yarnCmd -ArgumentList @('audit','--json') -WorkingDirectory $dir -OutFile $tmp
+          $job.Kind = 'yarn'; $job.Process = $p; $job.OutFile = $tmp; $job.ErrFile = "$tmp.err"
+        }
+        [void]$jobs.Add([pscustomobject]$job)
+      }
+
+      foreach ($job in $jobs) {
+        if ($null -eq $job.Process) { continue }
+        $code = Wait-RedirectedProcess -Process $job.Process
+        if ($code -eq 124) {
+          Write-QuietLog "$($job.Kind) audit timed out in $($job.Dir)"
+          if ($script:GuiMode) { Write-Output ("LOG|warn|{0} audit timed out in {1}" -f $job.Kind, $job.Dir) }
+          continue
+        }
+        $job.Ran = $true
+      }
+
+      foreach ($job in $jobs) {
+        $dir = $job.Dir
+        $pct = $job.Pct
+        $di = $job.Di
+        $ran = $false
+
+        if ($job.Kind -eq 'npm' -and $job.Ran -and $job.OutFile -and (Test-Path $job.OutFile)) {
+          try {
+            $raw = Get-Content -LiteralPath $job.OutFile -Raw
+            Remove-Item $job.OutFile,$job.ErrFile -Force -ErrorAction SilentlyContinue
             if ($raw -and $raw.Trim().StartsWith('{')) {
               $audit = $raw | ConvertFrom-Json
               $ran = $true
@@ -1917,20 +2173,13 @@ foreach ($eco in $ecoList) {
             } else {
               Write-QuietLog "npm audit produced no JSON in $dir"
             }
+          } catch {
+            Write-QuietLog "npm audit error in $dir : $($_.Exception.Message)"
+            Show-LiveProgress $pct 'Phase 3/4: Auditing npm/JS/TS' "[$di/$($dirs.Count)] audit failed, continuing..."
           }
-        } catch {
-          Write-QuietLog "npm audit error in $dir : $($_.Exception.Message)"
-          Show-LiveProgress $pct 'Phase 3/4: Auditing npm/JS/TS' "[$di/$($dirs.Count)] audit failed, continuing..."
-        }
-      }
-
-      if (-not $ran -and $yarnCmd -and (Test-Path (Join-Path $dir 'yarn.lock'))) {
-        try {
-          $tmp = Join-Path $script:TempDir ("audit-yarn-{0}.json" -f [guid]::NewGuid().ToString('N'))
-          $err = "$tmp.err"
-          [void](Invoke-NativeCommand -Command $(if ($yarnCmd) { $yarnCmd } else { 'yarn' }) -Arguments @('audit','--json') -WorkingDirectory $dir -OutFile $tmp)
-          if (Test-Path $tmp) {
-            Get-Content $tmp | ForEach-Object {
+        } elseif ($job.Kind -eq 'yarn' -and $job.Ran -and $job.OutFile -and (Test-Path $job.OutFile)) {
+          try {
+            Get-Content $job.OutFile | ForEach-Object {
               try {
                 $line = $_ | ConvertFrom-Json
                 if ($line.type -eq 'auditAdvisory') {
@@ -1939,51 +2188,89 @@ foreach ($eco in $ecoList) {
                 }
               } catch {}
             }
-            Remove-Item $tmp,$err -Force -ErrorAction SilentlyContinue
+            Remove-Item $job.OutFile,$job.ErrFile -Force -ErrorAction SilentlyContinue
             $ran = $true
+          } catch {
+            Write-QuietLog "yarn audit error in $dir : $($_.Exception.Message)"
           }
-        } catch {
-          Write-QuietLog "yarn audit error in $dir : $($_.Exception.Message)"
+        } else {
+          if ($job.OutFile) { Remove-Item $job.OutFile,$job.ErrFile -Force -ErrorAction SilentlyContinue }
         }
-      }
 
-      # Fallback: parse package.json deps and OSV-check direct deps (best effort)
-      if (-not $SkipOsv) {
-        $pj = Join-Path $dir 'package.json'
-        if (Test-Path $pj) {
-          try {
-            $j = Get-Content $pj -Raw | ConvertFrom-Json
-            foreach ($sec in @('dependencies','devDependencies')) {
-              if (-not $j.$sec) { continue }
-              foreach ($prop in $j.$sec.PSObject.Properties) {
-                $ver = ([string]$prop.Value) -replace '^[~^>=<\s]+',''
-                if ($ver -match '^\d') {
-                  Show-LiveProgress $pct 'Phase 3/4: Auditing npm via OSV' "$($prop.Name)@$ver"
-                  Add-OsvFindings 'npm' 'npm' $prop.Name $ver $pj 'osv-package.json'
+        # Fallback: OSV direct deps only when native audit did not run
+        if ((-not $SkipOsv) -and (-not $ran)) {
+          $pj = Join-Path $dir 'package.json'
+          if (Test-Path $pj) {
+            try {
+              $j = Get-Content $pj -Raw | ConvertFrom-Json
+              foreach ($sec in @('dependencies','devDependencies')) {
+                if (-not $j.$sec) { continue }
+                foreach ($prop in $j.$sec.PSObject.Properties) {
+                  $ver = ([string]$prop.Value) -replace '^[~^>=<\s]+',''
+                  if ($ver -match '^\d') {
+                    Show-LiveProgress $pct 'Phase 3/4: Auditing npm via OSV' "$($prop.Name)@$ver"
+                    Add-OsvFindings 'npm' 'npm' $prop.Name $ver $pj 'osv-package.json'
+                  }
                 }
               }
-            }
-          } catch {}
+            } catch {}
+          }
         }
       }
+      Flush-OsvQueue
     }
+    Flush-OsvQueue
   }
 
   # ----- NuGet / .NET -----
   elseif ($eco -eq 'nuget') {
-    $di = 0
-    foreach ($dir in $dirs) {
-      $di++
-      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
-      Show-LiveProgress $pct 'Phase 3/4: Auditing NuGet/.NET' "[$di/$($dirs.Count)] $dir"
+    $degree = [Math]::Max(1, [int]$script:parallelDegree)
+    $diDone = 0
+    for ($batchStart = 0; $batchStart -lt $dirs.Count; $batchStart += $degree) {
+      $batchEnd = [Math]::Min($batchStart + $degree - 1, $dirs.Count - 1)
+      $batch = @($dirs[$batchStart..$batchEnd])
+      $jobs = New-Object System.Collections.Generic.List[object]
 
-      if ($dotnetCmd) {
-        try {
+      foreach ($dir in $batch) {
+        $diDone++
+        $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $diDone / [Math]::Max(1,$dirs.Count))
+        Show-LiveProgress $pct 'Phase 3/4: Auditing NuGet/.NET' "[$diDone/$($dirs.Count)] $dir"
+        if ($script:GuiMode) { Write-Output ("ECOSTATUS|{0}|{1}|{2}" -f $eco, $diDone, $dirs.Count) }
+
+        $job = [ordered]@{
+          Dir = $dir; Di = $diDone; Pct = $pct
+          Process = $null; OutFile = $null; Ran = $false
+        }
+        if ($dotnetCmd) {
           $tmp = Join-Path $script:TempDir ("dotnet-vuln-{0}.txt" -f [guid]::NewGuid().ToString('N'))
-          Start-Process -FilePath $dotnetCmd -ArgumentList @('list','package','--vulnerable','--include-transitive') -WorkingDirectory $dir -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $script:DevNull | Out-Null
-          if (Test-Path $tmp) {
-            $content = Get-Content $tmp
-            Remove-Item $tmp -Force
+          $p = Start-RedirectedProcess -FilePath $dotnetCmd -ArgumentList @('list','package','--vulnerable','--include-transitive') -WorkingDirectory $dir -OutFile $tmp
+          $job.Process = $p; $job.OutFile = $tmp
+        }
+        [void]$jobs.Add([pscustomobject]$job)
+      }
+
+      foreach ($job in $jobs) {
+        if ($null -eq $job.Process) { continue }
+        $code = Wait-RedirectedProcess -Process $job.Process
+        if ($code -eq 124) {
+          Write-QuietLog "dotnet list timed out in $($job.Dir)"
+          if ($script:GuiMode) { Write-Output ("LOG|warn|dotnet list timed out in {0}" -f $job.Dir) }
+          continue
+        }
+        $job.Ran = $true
+      }
+
+      foreach ($job in $jobs) {
+        $dir = $job.Dir
+        $pct = $job.Pct
+        $di = $job.Di
+        $dotnetRan = $false
+
+        if ($job.Ran -and $job.OutFile -and (Test-Path $job.OutFile)) {
+          try {
+            $content = Get-Content $job.OutFile
+            Remove-Item $job.OutFile -Force -ErrorAction SilentlyContinue
+            $dotnetRan = $true
             $currentPkg = ''
             foreach ($line in $content) {
               if ($line -match '^\s*>\s*(\S+)\s+(\S+)') {
@@ -2000,57 +2287,93 @@ foreach ($eco in $ecoList) {
             } else {
               Write-QuietLog "dotnet: no vulnerable packages listed in $dir"
             }
+          } catch {
+            Write-QuietLog "dotnet list failed in $dir : $($_.Exception.Message)"
           }
-        } catch {
-          Write-QuietLog "dotnet list failed in $dir : $($_.Exception.Message)"
+        } elseif ($job.OutFile) {
+          Remove-Item $job.OutFile -Force -ErrorAction SilentlyContinue
         }
-      }
 
-      # Parse PackageReference from csproj for OSV
-      if (-not $SkipOsv) {
-        Get-ChildItem -LiteralPath $dir -Filter '*.csproj' -File -ErrorAction SilentlyContinue | ForEach-Object {
-          Show-LiveProgress $pct 'Phase 3/4: Auditing NuGet via OSV' $_.Name
-          try {
-            [xml]$xml = Get-Content -LiteralPath $_.FullName -Raw
-            $refs = $xml.SelectNodes('//PackageReference')
-            foreach ($r in $refs) {
-              $id = $r.GetAttribute('Include'); if (-not $id) { $id = $r.GetAttribute('Update') }
-              $ver = $r.GetAttribute('Version')
-              if ($id -and $ver) { Add-OsvFindings 'nuget' 'NuGet' $id $ver $_.FullName 'osv-csproj' }
-            }
-          } catch {}
-        }
-        $pkgConfig = Join-Path $dir 'packages.config'
-        if (Test-Path $pkgConfig) {
-          try {
-            [xml]$xml = Get-Content $pkgConfig -Raw
-            foreach ($p in $xml.packages.package) {
-              Add-OsvFindings 'nuget' 'NuGet' $p.id $p.version $pkgConfig 'osv-packages.config'
-            }
-          } catch {}
+        if ((-not $SkipOsv) -and (-not $dotnetRan)) {
+          Get-ChildItem -LiteralPath $dir -Filter '*.csproj' -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Show-LiveProgress $pct 'Phase 3/4: Auditing NuGet via OSV' $_.Name
+            try {
+              [xml]$xml = Get-Content -LiteralPath $_.FullName -Raw
+              $refs = $xml.SelectNodes('//PackageReference')
+              foreach ($r in $refs) {
+                $id = $r.GetAttribute('Include'); if (-not $id) { $id = $r.GetAttribute('Update') }
+                $ver = $r.GetAttribute('Version')
+                if ($id -and $ver) { Add-OsvFindings 'nuget' 'NuGet' $id $ver $_.FullName 'osv-csproj' }
+              }
+            } catch {}
+          }
+          $pkgConfig = Join-Path $dir 'packages.config'
+          if (Test-Path $pkgConfig) {
+            try {
+              [xml]$xml = Get-Content $pkgConfig -Raw
+              foreach ($p in $xml.packages.package) {
+                Add-OsvFindings 'nuget' 'NuGet' $p.id $p.version $pkgConfig 'osv-packages.config'
+              }
+            } catch {}
+          }
         }
       }
+      Flush-OsvQueue
     }
+    Flush-OsvQueue
   }
 
   # ----- Python -----
   elseif ($eco -eq 'PyPI') {
-    $di = 0
-    foreach ($dir in $dirs) {
-      $di++
-      $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $di / [Math]::Max(1,$dirs.Count))
-      Show-LiveProgress $pct 'Phase 3/4: Auditing Python' "[$di/$($dirs.Count)] $dir"
+    $degree = [Math]::Max(1, [int]$script:parallelDegree)
+    $diDone = 0
+    for ($batchStart = 0; $batchStart -lt $dirs.Count; $batchStart += $degree) {
+      $batchEnd = [Math]::Min($batchStart + $degree - 1, $dirs.Count - 1)
+      $batch = @($dirs[$batchStart..$batchEnd])
+      $jobs = New-Object System.Collections.Generic.List[object]
 
-      if ($pipAudit) {
-        try {
+      foreach ($dir in $batch) {
+        $diDone++
+        $pct = $basePct + ((50.0 / [Math]::Max(1,$ecoList.Count)) * $diDone / [Math]::Max(1,$dirs.Count))
+        Show-LiveProgress $pct 'Phase 3/4: Auditing Python' "[$diDone/$($dirs.Count)] $dir"
+        if ($script:GuiMode) { Write-Output ("ECOSTATUS|{0}|{1}|{2}" -f 'PyPI', $diDone, $dirs.Count) }
+
+        $job = [ordered]@{
+          Dir = $dir; Di = $diDone; Pct = $pct
+          Process = $null; OutFile = $null; Ran = $false
+        }
+        if ($pipAudit) {
           $tmp = Join-Path $script:TempDir ("pip-audit-{0}.json" -f [guid]::NewGuid().ToString('N'))
           $req = Join-Path $dir 'requirements.txt'
           $args = @('-f','json')
           if (Test-Path $req) { $args = @('-r', $req, '-f', 'json') }
-          Start-Process -FilePath $pipAudit -ArgumentList $args -WorkingDirectory $dir -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $script:DevNull | Out-Null
-          if (Test-Path $tmp) {
-            $data = Get-Content $tmp -Raw | ConvertFrom-Json
-            Remove-Item $tmp -Force
+          $p = Start-RedirectedProcess -FilePath $pipAudit -ArgumentList $args -WorkingDirectory $dir -OutFile $tmp
+          $job.Process = $p; $job.OutFile = $tmp
+        }
+        [void]$jobs.Add([pscustomobject]$job)
+      }
+
+      foreach ($job in $jobs) {
+        if ($null -eq $job.Process) { continue }
+        $code = Wait-RedirectedProcess -Process $job.Process
+        if ($code -eq 124) {
+          Write-QuietLog "pip-audit timed out in $($job.Dir)"
+          if ($script:GuiMode) { Write-Output ("LOG|warn|pip-audit timed out in {0}" -f $job.Dir) }
+          continue
+        }
+        $job.Ran = $true
+      }
+
+      foreach ($job in $jobs) {
+        $dir = $job.Dir
+        $pct = $job.Pct
+        $pipRan = $false
+
+        if ($job.Ran -and $job.OutFile -and (Test-Path $job.OutFile)) {
+          try {
+            $data = Get-Content $job.OutFile -Raw | ConvertFrom-Json
+            Remove-Item $job.OutFile -Force -ErrorAction SilentlyContinue
+            $pipRan = $true
             foreach ($row in @($data)) {
               $pkg = [string]$row.name
               $ver = [string]$row.version
@@ -2061,35 +2384,45 @@ foreach ($eco in $ecoList) {
                 )
               }
             }
-          }
-        } catch { Write-QuietLog "pip-audit failed in $dir" }
-      }
+          } catch { Write-QuietLog "pip-audit failed in $dir" }
+        } elseif ($job.OutFile) {
+          Remove-Item $job.OutFile -Force -ErrorAction SilentlyContinue
+        }
 
-      if (-not $SkipOsv) {
-        $req = Join-Path $dir 'requirements.txt'
-        if (Test-Path $req) {
-          Get-Content $req | ForEach-Object {
-            $line = $_.Trim()
-            if ($line -match '^\s*#' -or -not $line) { return }
-            if ($line -match '^([A-Za-z0-9_.-]+)\s*==\s*([A-Za-z0-9_.+-]+)') {
-              Show-LiveProgress $pct 'Phase 3/4: Auditing Python via OSV' "$($Matches[1])==$($Matches[2])"
-              Add-OsvFindings 'PyPI' 'PyPI' $Matches[1] $Matches[2] $req 'osv-requirements'
+        if ((-not $SkipOsv) -and (-not $pipRan)) {
+          $req = Join-Path $dir 'requirements.txt'
+          if (Test-Path $req) {
+            Get-Content $req | ForEach-Object {
+              $line = $_.Trim()
+              if ($line -match '^\s*#' -or -not $line) { return }
+              if ($line -match '^([A-Za-z0-9_.-]+)\s*==\s*([A-Za-z0-9_.+-]+)') {
+                Show-LiveProgress $pct 'Phase 3/4: Auditing Python via OSV' "$($Matches[1])==$($Matches[2])"
+                Add-OsvFindings 'PyPI' 'PyPI' $Matches[1] $Matches[2] $req 'osv-requirements'
+              }
             }
           }
         }
       }
+      Flush-OsvQueue
     }
+    Flush-OsvQueue
   }
 
   # ----- Go -----
   elseif ($eco -eq 'Go') {
+    $di = 0
     foreach ($dir in $dirs) {
-      Show-LiveProgress ($basePct + 5) 'Phase 3/4: Auditing Go' $dir
+      $di++
+      Show-LiveProgress ($basePct + 5) 'Phase 3/4: Auditing Go' "[$di/$($dirs.Count)] $dir"
+      if ($script:GuiMode) { Write-Output ("ECOSTATUS|{0}|{1}|{2}" -f 'Go', $di, $dirs.Count) }
       if ($govuln) {
         try {
           $tmp = Join-Path $script:TempDir ("govuln-{0}.json" -f [guid]::NewGuid().ToString('N'))
-          Start-Process -FilePath $govuln -ArgumentList @('-json','./...') -WorkingDirectory $dir -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $script:DevNull | Out-Null
-          if (Test-Path $tmp) {
+          $p = Start-RedirectedProcess -FilePath $govuln -ArgumentList @('-json','./...') -WorkingDirectory $dir -OutFile $tmp
+          $code = Wait-RedirectedProcess -Process $p
+          if ($code -eq 124) {
+            Write-QuietLog "govulncheck timed out in $dir"
+          } elseif (Test-Path $tmp) {
             Get-Content $tmp | ForEach-Object {
               try {
                 $o = $_ | ConvertFrom-Json
@@ -2099,7 +2432,7 @@ foreach ($eco in $ecoList) {
                 }
               } catch {}
             }
-            Remove-Item $tmp -Force
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
           }
         } catch { Write-QuietLog "govulncheck failed in $dir" }
       }
@@ -2112,6 +2445,7 @@ foreach ($eco in $ecoList) {
         }
       }
     }
+    Flush-OsvQueue
   }
 
   # ----- Rust -----
@@ -2367,6 +2701,7 @@ if (-not $SkipCache) {
 } else {
   Write-QuietLog 'Skipping caches (-SkipCache)'
 }
+Flush-OsvQueue
 
 # =============================================================================
 # REPORT + NOTIFY  (dangerous findings only, grouped by project)
@@ -2724,6 +3059,7 @@ $(Get-ReportStyles)
 "@
 $reportOk = $false
 try {
+  Flush-OsvQueue
   Save-FindingsJson
   Save-HtmlFile -Path $outHtml -Content $html
   $reportOk = $true

@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import type { LiveFinding, StatusEvent } from '../shared/types'
 
 interface ProgressViewProps {
@@ -10,6 +9,9 @@ interface ProgressViewProps {
   events: StatusEvent[]
   scanState: 'idle' | 'running' | 'paused'
   elapsedMs: number
+  ecoLabel: string
+  ecoCurrent: number
+  ecoTotal: number
   onClearEvents: () => void
 }
 
@@ -41,13 +43,8 @@ export function ProgressView(props: ProgressViewProps) {
   const active = props.scanState === 'running' || props.scanState === 'paused'
   const phaseStep = parsePhaseStep(props.phase)
   const itemProgress = parseItemProgress(props.detail)
-
-  const etaMs = useMemo(() => {
-    if (!active || props.scanState === 'paused') return null
-    if (pct < 2 || pct >= 100) return null
-    // Weighted estimate from elapsed / percent complete
-    return props.elapsedMs * ((100 - pct) / pct)
-  }, [active, pct, props.elapsedMs, props.scanState])
+  const showEco =
+    Boolean(props.ecoLabel) && props.ecoTotal > 0 && (active || props.ecoCurrent > 0)
 
   const detailText = itemProgress?.label || props.detail
 
@@ -69,10 +66,12 @@ export function ProgressView(props: ProgressViewProps) {
                   Item {itemProgress.current} of {itemProgress.total}
                 </span>
               )}
-              {active && <span>Elapsed {formatDuration(props.elapsedMs)}</span>}
-              {etaMs != null && etaMs > 0 && (
-                <span>~{formatDuration(etaMs)} left</span>
+              {showEco && (
+                <span className="eco-chip">
+                  {props.ecoLabel} {props.ecoCurrent}/{props.ecoTotal}
+                </span>
               )}
+              {active && <span>Elapsed {formatDuration(props.elapsedMs)}</span>}
               {props.scanState === 'paused' && <span>Paused</span>}
             </div>
           </div>
@@ -81,6 +80,24 @@ export function ProgressView(props: ProgressViewProps) {
         <div className="bar" aria-hidden="true">
           <div className="bar-fill" style={{ width: `${pct}%` }} />
         </div>
+        {showEco && (
+          <div className="eco-bar" aria-label={`${props.ecoLabel} progress`}>
+            <div className="eco-bar-label">
+              <span>{props.ecoLabel}</span>
+              <span>
+                {props.ecoCurrent} / {props.ecoTotal}
+              </span>
+            </div>
+            <div className="eco-bar-track">
+              <div
+                className="eco-bar-fill"
+                style={{
+                  width: `${Math.min(100, (props.ecoCurrent / Math.max(1, props.ecoTotal)) * 100)}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="split-panels">
