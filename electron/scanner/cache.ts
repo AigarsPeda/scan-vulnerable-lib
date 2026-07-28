@@ -91,7 +91,9 @@ async function scanNpmCaches(
           const key = `npm|${name}@${version}`
           if (seen.has(key)) continue
           seen.add(key)
-          osv.enqueue('npm', 'npm', name, version, file, 'cache:npm-cache')
+          // Store the cache root (not the content-hash index file) so the UI
+          // can group/label as "npm cache" instead of 0243eb57….
+          osv.enqueue('npm', 'npm', name, version, root, 'cache:npm-cache')
           checked++
         }
       })
@@ -138,7 +140,7 @@ async function scanYarnCaches(
       const key = `npm|${name}@${version}`
       if (seen.has(key)) return
       seen.add(key)
-      osv.enqueue('npm', 'npm', name, version, file, 'cache:yarn-cache')
+      osv.enqueue('npm', 'npm', name, version, root, 'cache:yarn-cache')
       checked++
     })
   }
@@ -174,7 +176,7 @@ async function scanNugetCache(
       const key = `nuget|${id}@${ver}`
       if (seen.has(key)) continue
       seen.add(key)
-      osv.enqueue('nuget', 'NuGet', id, ver, path.join(idDir, ver), 'cache:nuget')
+      osv.enqueue('nuget', 'NuGet', id, ver, root, 'cache:nuget')
       checked++
     }
   }

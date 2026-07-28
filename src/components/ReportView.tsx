@@ -63,8 +63,64 @@ const MANIFEST_BASENAMES = new Set(
 
 const MANIFEST_EXTS = new Set(['.csproj', '.fsproj', '.vbproj', '.sln'])
 
+/**
+ * npm/_cacache stores packages under content-addressable hashes. Without collapsing
+ * those paths, Windows reports show dozens of "projects" named like 0243eb57….
+ */
+function cacheBucket(
+  pathValue: string,
+  source: string,
+  isCache: boolean
+): { key: string; name: string } | null {
+  const src = (source || '').trim().toLowerCase()
+  if (src === 'cache:npm-cache' || src === 'cache:npm') {
+    return { key: 'cache:npm-cache', name: 'npm cache' }
+  }
+  if (src === 'cache:yarn-cache' || src === 'cache:yarn') {
+    return { key: 'cache:yarn-cache', name: 'yarn cache' }
+  }
+  if (src === 'cache:nuget' || src === 'cache:nuget-cache') {
+    return { key: 'cache:nuget', name: 'NuGet cache' }
+  }
+  if (/^cache:/i.test(src)) {
+    const kind = src.slice('cache:'.length) || 'package'
+    return { key: src, name: `${kind} cache` }
+  }
+
+  const p = (pathValue || '').replace(/\\/g, '/').toLowerCase()
+  const base = p.split('/').filter(Boolean).pop() || ''
+  const hashLike = /^[a-f0-9]{32,}$/i.test(base)
+  const looksCache =
+    isCache ||
+    hashLike ||
+    p.includes('/_cacache/') ||
+    p.includes('/npm-cache') ||
+    p.includes('/.npm/') ||
+    p.includes('/yarn/cache') ||
+    p.includes('/berry/cache') ||
+    p.includes('/.nuget/packages')
+
+  if (!looksCache) return null
+
+  if (p.includes('/_cacache/') || p.includes('/npm-cache') || p.includes('/.npm/')) {
+    return { key: 'cache:npm-cache', name: 'npm cache' }
+  }
+  if (p.includes('/yarn/') || p.includes('/berry/cache')) {
+    return { key: 'cache:yarn-cache', name: 'yarn cache' }
+  }
+  if (p.includes('/.nuget/packages')) {
+    return { key: 'cache:nuget', name: 'NuGet cache' }
+  }
+  if (isCache || hashLike) {
+    return { key: 'cache:package', name: 'Package cache' }
+  }
+  return null
+}
+
 /** Prefer project folder name over manifest filename (package.json, requirements.txt, …). */
-function folderLabel(pathValue: string): string {
+function folderLabel(pathValue: string, source = '', isCache = false): string {
+  const cache = cacheBucket(pathValue, source, isCache)
+  if (cache) return cache.name
   if (!pathValue) return '(unknown)'
   const parts = pathValue.replace(/\\/g, '/').split('/').filter(Boolean)
   if (!parts.length) return pathValue
@@ -78,7 +134,9 @@ function folderLabel(pathValue: string): string {
 }
 
 /** Normalize finding path to project folder when it points at a manifest file. */
-function projectKey(pathValue: string): string {
+function projectKey(pathValue: string, source = '', isCache = false): string {
+  const cache = cacheBucket(pathValue, source, isCache)
+  if (cache) return cache.key
   if (!pathValue || pathValue === '(unknown)') return pathValue || '(unknown)'
   const normalized = pathValue.replace(/\\/g, '/')
   const parts = normalized.split('/').filter(Boolean)
@@ -132,7 +190,7 @@ export function ReportView(props: ReportViewProps) {
   const projectOptions = useMemo(() => {
     const map = new Map<string, { path: string; name: string; isCache: boolean; count: number }>()
     for (const f of props.findings) {
-      const path = projectKey(f.path || '(unknown)')
+      const path = projectKey(f.path || '(unknown)', f.source, f.isCache)
       const existing = map.get(path)
       if (existing) {
         existing.count++
@@ -140,8 +198,8 @@ export function ReportView(props: ReportViewProps) {
       } else {
         map.set(path, {
           path,
-          name: folderLabel(path),
-          isCache: f.isCache,
+          name: folderLabel(f.path || '(unknown)', f.source, f.isCache),
+          isCache: f.isCache || path.startsWith('cache:'),
           count: 1,
         })
       }
@@ -165,9 +223,10 @@ export function ReportView(props: ReportViewProps) {
     const map = new Map<string, ReportFinding[]>()
 
     for (const f of props.findings) {
-      if (kind === 'project' && f.isCache) continue
-      if (kind === 'cache' && !f.isCache) continue
-      const key = projectKey(f.path || '(unknown)')
+      const key = projectKey(f.path || '(unknown)', f.source, f.isCache)
+      const isCacheRow = f.isCache || key.startsWith('cache:')
+      if (kind === 'project' && isCacheRow) continue
+      if (kind === 'cache' && !isCacheRow) continue
       if (selectedProject !== 'all' && key !== selectedProject) continue
       if (selectedEco !== 'all' && (f.ecosystem || '') !== selectedEco) continue
       if (fix === 'fix' && !f.hasFix) continue
@@ -182,12 +241,21 @@ export function ReportView(props: ReportViewProps) {
       map.set(key, list)
     }
 
-    return Array.from(map.entries()).map(([path, items]) => ({
-      path,
-      name: folderLabel(path),
-      isCache: items.some((i) => i.isCache),
-      items: [...items].sort(sortBySeverity),
-    }))
+    return Array.from(map.entries()).map(([path, items]) => {
+      const isCache = items.some((i) => i.isCache) || path.startsWith('cache:')
+      // Synthetic cache:* keys are for grouping only; Open/Copy need a real folder.
+      const fsPath =
+        path.startsWith('cache:')
+          ? items.find((i) => i.path && !i.path.startsWith('cache:'))?.path || ''
+          : path
+      return {
+        path,
+        fsPath,
+        name: folderLabel(items[0]?.path || path, items[0]?.source || '', isCache),
+        isCache,
+        items: [...items].sort(sortBySeverity),
+      }
+    })
   }, [props.findings, kind, sev, query, selectedProject, selectedEco, fix])
 
   const visibleCount = groups.reduce((n, g) => n + g.items.length, 0)
@@ -346,13 +414,13 @@ export function ReportView(props: ReportViewProps) {
                       {group.isCache ? 'CACHE' : 'PROJECT'} · {group.items.length} finding
                       {group.items.length === 1 ? '' : 's'}
                     </div>
-                    {group.path && group.path !== '(unknown)' && (
+                    {group.fsPath && group.fsPath !== '(unknown)' && (
                       <div className="path-actions">
                         <button
                           type="button"
                           className="btn ghost tiny"
                           title="Open folder"
-                          onClick={() => props.onOpenPath(group.path)}
+                          onClick={() => props.onOpenPath(group.fsPath)}
                         >
                           Open
                         </button>
@@ -360,7 +428,7 @@ export function ReportView(props: ReportViewProps) {
                           type="button"
                           className="btn ghost tiny"
                           title="Copy path"
-                          onClick={() => props.onCopyPath(group.path)}
+                          onClick={() => props.onCopyPath(group.fsPath)}
                         >
                           Copy
                         </button>
@@ -368,7 +436,7 @@ export function ReportView(props: ReportViewProps) {
                     )}
                   </div>
                   <h3>{group.name}</h3>
-                  <div className="report-group-path">{group.path}</div>
+                  <div className="report-group-path">{group.fsPath || group.path}</div>
                 </header>
                 <ul className="report-items">
                   {group.items.map((f) => (
