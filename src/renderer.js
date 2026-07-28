@@ -25,6 +25,7 @@ let findingCount = 0;
 function setTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+  if (name === 'report') loadReportIfAny();
 }
 
 function addEvent(type, text) {
@@ -208,6 +209,19 @@ btnRefreshReport.addEventListener('click', () => {
   loadReportIfAny();
 });
 
+document.querySelectorAll('[data-export]').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const format = btn.getAttribute('data-export');
+    const res = await window.scannerApi.exportReport(format);
+    if (res?.canceled) return;
+    if (!res?.ok) {
+      addEvent('error', res?.error || `Export ${format} failed`);
+      return;
+    }
+    addEvent('done', `Exported ${String(format).toUpperCase()}: ${res.path}`);
+  });
+});
+
 btnRun.addEventListener('click', async () => {
   if (scanState === 'idle') {
     await startScan();
@@ -247,7 +261,8 @@ window.scannerApi.onReportUpdated((payload) => {
   if (!payload?.url) return;
   if (payload.mtimeMs && payload.mtimeMs === lastReportMtime) return;
   lastReportMtime = payload.mtimeMs || Date.now();
-  if (document.getElementById('view-report').classList.contains('active') || scanState === 'idle') {
+  // Live-reload report while viewing Report tab (Electron, not browser meta-refresh)
+  if (document.getElementById('view-report').classList.contains('active')) {
     showReport(payload.url);
   }
 });

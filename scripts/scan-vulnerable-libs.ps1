@@ -95,6 +95,8 @@ $script:GuiMode = [bool]$GuiMode
 $script:GuiPaused = $false
 $script:progressJsonPath = Join-Path (Split-Path -Parent $outHtml) 'scan-progress.json'
 $script:controlJsonPath = Join-Path (Split-Path -Parent $outHtml) 'scan-control.json'
+$script:findingsJsonPath = Join-Path (Split-Path -Parent $outHtml) 'findings.json'
+$script:lastFindingsJsonWrite = [datetime]::MinValue
 if ($script:GuiMode) {
   try {
     $utf8Ctrl = New-Object System.Text.UTF8Encoding $false
@@ -275,7 +277,7 @@ function Show-LiveProgress {
   }
 
   # Refresh HTML progress periodically while scanning
-  $htmlEvery = if ($script:GuiMode) { 8 } else { 15 }
+  $htmlEvery = if ($script:GuiMode) { 2 } else { 15 }
   if (-not $script:lastHtmlFlush -or ($now - $script:lastHtmlFlush).TotalSeconds -ge $htmlEvery) {
     Save-ProgressHtml
     $script:lastHtmlFlush = $now
@@ -631,12 +633,28 @@ function Add-LogEntry {
     IsCache = [bool]$IsCache
   }) | Out-Null
 
-  # refresh HTML every ~15s so you can open it while scanning
+  # refresh HTML / findings JSON often in GUI; slower for standalone HTML viewers
   $now = Get-Date
-  if (($now - $script:lastHtmlFlush).TotalSeconds -ge 15) {
+  $flushEvery = if ($script:GuiMode) { 2 } else { 15 }
+  if (($now - $script:lastHtmlFlush).TotalSeconds -ge $flushEvery) {
     Save-ProgressHtml
     $script:lastHtmlFlush = $now
   }
+}
+
+function Save-FindingsJson {
+  try {
+    $payload = [ordered]@{
+      generated = (Get-Date).ToString('o')
+      platform  = [string]$script:OsLabel
+      count     = [int]$findings.Count
+      findings  = @($findings)
+    }
+    $json = ($payload | ConvertTo-Json -Depth 8)
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($script:findingsJsonPath, $json, $utf8)
+    $script:lastFindingsJsonWrite = Get-Date
+  } catch {}
 }
 
 function Save-ProgressHtml {
@@ -823,14 +841,13 @@ function Save-ProgressHtml {
 <head>
 <meta charset="utf-8" />
 <title>Scan progress</title>
-<meta http-equiv="refresh" content="20" />
 <style>
 $(Get-ReportStyles)
 </style>
 </head>
 <body>
   <h1>Scan progress</h1>
-  <div class="meta">Updated $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - refreshes every 20s</div>
+  <div class="meta">Updated $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') · live in app</div>
   <div class="live">
     <div class="live-top">
       <span class="pct">$livePct%</span>
@@ -846,7 +863,7 @@ $(Get-ReportStyles)
     <span class="low">low: $cLow</span>
   </div>
   $findingsHtml
-  <p class="hint">When the scan finishes, this file becomes the full final report (same filters and details).</p>
+  <p class="hint">View live in the app Report tab. Use Export to save JSON, TXT, CSV, Markdown, or HTML.</p>
 <script>
 (function () {
   var projects = Array.prototype.slice.call(document.querySelectorAll('#projects .project'));
@@ -973,6 +990,7 @@ $(Get-ReportStyles)
 </body>
 </html>
 "@
+  Save-FindingsJson
   Save-HtmlFile -Path $logPath -Content $html
 }
 
@@ -2685,6 +2703,7 @@ $(Get-ReportStyles)
 "@
 $reportOk = $false
 try {
+  Save-FindingsJson
   Save-HtmlFile -Path $outHtml -Content $html
   $reportOk = $true
 } catch {

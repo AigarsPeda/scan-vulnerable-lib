@@ -92,8 +92,20 @@
 
       <section class="view" id="view-report">
         <div class="report-toolbar">
-          <h2>Findings report</h2>
-          <button type="button" class="btn ghost small" id="btn-refresh-report">Refresh</button>
+          <div>
+            <h2>Findings report</h2>
+            <p class="report-note">Stays inside the app. Export a copy when you need a file.</p>
+          </div>
+          <div class="report-actions">
+            <div class="export-group" role="group" aria-label="Export report">
+              <button type="button" class="btn ghost small" data-export="json">JSON</button>
+              <button type="button" class="btn ghost small" data-export="txt">TXT</button>
+              <button type="button" class="btn ghost small" data-export="csv">CSV</button>
+              <button type="button" class="btn ghost small" data-export="md">Markdown</button>
+              <button type="button" class="btn ghost small" data-export="html">HTML</button>
+            </div>
+            <button type="button" class="btn ghost small" id="btn-refresh-report">Refresh</button>
+          </div>
         </div>
         <div class="report-frame-wrap panel">
           <iframe id="report-frame" title="Vulnerability report" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>

@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('scannerApi', {
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   getReportUrl: () => ipcRenderer.invoke('get-report-url'),
+  exportReport: (format) => ipcRenderer.invoke('export-report', format),
   startScan: (options) => ipcRenderer.invoke('start-scan', options),
   pauseScan: () => ipcRenderer.invoke('pause-scan'),
   resumeScan: () => ipcRenderer.invoke('resume-scan'),

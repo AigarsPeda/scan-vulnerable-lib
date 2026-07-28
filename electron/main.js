@@ -33,6 +33,10 @@ function writeControlAction(action) {
   fs.writeFileSync(getControlPath(), payload, 'utf8');
 }
 
+function getFindingsPath() {
+  return path.join(getDataDir(), 'findings.json');
+}
+
 function getScannerScriptPath() {
   return path.join(__dirname, '..', 'scripts', 'scan-vulnerable-libs.ps1');
 }
@@ -173,6 +177,164 @@ ipcMain.handle('get-report-url', async () => {
   const reportPath = getReportPath();
   if (!fs.existsSync(reportPath)) return { ok: false, error: 'No report yet.' };
   return { ok: true, path: reportPath, url: pathToFileURL(reportPath).href };
+});
+
+function readFindingsData() {
+  const p = getFindingsPath();
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function csvEscape(value) {
+  const s = value == null ? '' : String(value);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function buildExportContent(format, data) {
+  const findings = Array.isArray(data?.findings) ? data.findings : [];
+  const generated = data?.generated || new Date().toISOString();
+  const count = data?.count ?? findings.length;
+
+  if (format === 'json') {
+    return {
+      content: JSON.stringify({ generated, platform: data?.platform || '', count, findings }, null, 2),
+      defaultPath: `vulnerable-libs-report.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    };
+  }
+
+  if (format === 'csv') {
+    const header = [
+      'Severity',
+      'Ecosystem',
+      'Package',
+      'Version',
+      'Title',
+      'Path',
+      'HasFix',
+      'Fix',
+      'Advisory',
+      'IsCache',
+      'Source',
+    ];
+    const rows = findings.map((f) =>
+      [
+        f.Severity,
+        f.Ecosystem,
+        f.Package,
+        f.Version,
+        f.Title,
+        f.Path,
+        f.HasFix ? 'yes' : 'no',
+        f.Fix,
+        f.Advisory,
+        f.IsCache ? 'yes' : 'no',
+        f.Source,
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+    return {
+      content: [header.join(','), ...rows].join('\r\n'),
+      defaultPath: `vulnerable-libs-report.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    };
+  }
+
+  if (format === 'txt') {
+    const lines = [
+      'Vulnerable Library Scanner Report',
+      `Generated: ${generated}`,
+      `Findings: ${count}`,
+      '',
+    ];
+    findings.forEach((f, i) => {
+      lines.push(`--- ${i + 1}. [${String(f.Severity || 'unknown').toUpperCase()}] ${f.Package || ''}@${f.Version || ''} ---`);
+      lines.push(`Ecosystem: ${f.Ecosystem || ''}`);
+      lines.push(`Title: ${f.Title || ''}`);
+      lines.push(`Path: ${f.Path || ''}`);
+      lines.push(`Fix available: ${f.HasFix ? 'yes' : 'no'}`);
+      if (f.Fix) lines.push(`Fix: ${f.Fix}`);
+      if (f.Advisory) lines.push(`Advisories: ${f.Advisory}`);
+      lines.push('');
+    });
+    return {
+      content: lines.join('\r\n'),
+      defaultPath: `vulnerable-libs-report.txt`,
+      filters: [{ name: 'Text', extensions: ['txt'] }],
+    };
+  }
+
+  if (format === 'md') {
+    const lines = [
+      '# Vulnerable Library Scanner Report',
+      '',
+      `- Generated: ${generated}`,
+      `- Findings: **${count}**`,
+      '',
+    ];
+    findings.forEach((f, i) => {
+      lines.push(`## ${i + 1}. ${f.Package || 'package'}@${f.Version || '?'}`);
+      lines.push('');
+      lines.push(`- **Severity:** ${f.Severity || 'unknown'}`);
+      lines.push(`- **Ecosystem:** ${f.Ecosystem || ''}`);
+      lines.push(`- **Title:** ${f.Title || ''}`);
+      lines.push(`- **Path:** \`${f.Path || ''}\``);
+      lines.push(`- **Fix available:** ${f.HasFix ? 'yes' : 'no'}`);
+      if (f.Fix) lines.push(`- **Fix:** ${f.Fix}`);
+      if (f.Advisory) lines.push(`- **Advisories:** ${f.Advisory}`);
+      lines.push('');
+    });
+    return {
+      content: lines.join('\n'),
+      defaultPath: `vulnerable-libs-report.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    };
+  }
+
+  if (format === 'html') {
+    const reportPath = getReportPath();
+    if (!fs.existsSync(reportPath)) {
+      throw new Error('No HTML report yet.');
+    }
+    return {
+      content: fs.readFileSync(reportPath, 'utf8'),
+      defaultPath: `vulnerable-libs-report.html`,
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    };
+  }
+
+  throw new Error(`Unknown export format: ${format}`);
+}
+
+ipcMain.handle('export-report', async (_event, format = 'json') => {
+  try {
+    const data = readFindingsData();
+    if ((!data || !Array.isArray(data.findings) || data.findings.length === 0) && format !== 'html') {
+      return { ok: false, error: 'No findings to export yet. Run a scan first.' };
+    }
+    if (format === 'html' && !fs.existsSync(getReportPath())) {
+      return { ok: false, error: 'No HTML report yet. Run a scan first.' };
+    }
+
+    const built = buildExportContent(format, data || { findings: [], count: 0 });
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: `Export report (${String(format).toUpperCase()})`,
+      defaultPath: path.join(os.homedir(), 'Desktop', built.defaultPath),
+      filters: built.filters,
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+    fs.writeFileSync(result.filePath, built.content, 'utf8');
+    return { ok: true, path: result.filePath, format };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 ipcMain.handle('reveal-data', async () => {

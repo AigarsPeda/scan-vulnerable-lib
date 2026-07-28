@@ -575,8 +575,30 @@ button, input { font-family: inherit; }
 .report-toolbar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 12px;
   flex-shrink: 0;
+}
+.report-note {
+  margin: 6px 0 0;
+  color: var(--muted-2);
+  font-size: 12px;
+}
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.export-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--line);
 }
 .report-frame-wrap {
   position: relative;
