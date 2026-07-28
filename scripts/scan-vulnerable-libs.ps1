@@ -666,21 +666,48 @@ function Add-LogEntry {
 
 function Save-FindingsJson {
   try {
-    $payload = [ordered]@{
-      generated = (Get-Date).ToString('o')
-      platform  = [string]$script:OsLabel
-      count     = [int]$findings.Count
-      findings  = @($findings)
-    }
-    $json = ($payload | ConvertTo-Json -Depth 8 -Compress)
     $utf8 = New-Object System.Text.UTF8Encoding $false
-    # Atomic write so the UI never reads a half-written file (was causing Report flash/empty)
+    $generated = (Get-Date).ToString('o')
+    $platform = [string]$script:OsLabel
+    $count = [int]$findings.Count
+
+    # Serialize each finding separately. ConvertTo-Json on the full list can hit the
+    # Windows PowerShell ~2MB JavaScriptSerializer limit and fail silently — which made
+    # the live Report disappear when the UI reloaded an empty/stale file at scan end.
+    $rowJson = New-Object System.Collections.Generic.List[string]
+    foreach ($f in $findings) {
+      $row = [ordered]@{
+        Ecosystem = [string]$f.Ecosystem
+        Source    = [string]$f.Source
+        Severity  = [string]$f.Severity
+        Package   = [string]$f.Package
+        Version   = [string]$f.Version
+        Title     = [string]$f.Title
+        Advisory  = [string]$f.Advisory
+        Path      = [string]$f.Path
+        Fix       = [string]$f.Fix
+        HasFix    = [bool]$f.HasFix
+        IsCache   = [bool]$f.IsCache
+      }
+      [void]$rowJson.Add((($row | ConvertTo-Json -Depth 4 -Compress)))
+    }
+
+    $json = '{"generated":' + (ConvertTo-Json $generated -Compress) +
+      ',"platform":' + (ConvertTo-Json $platform -Compress) +
+      ',"count":' + $count +
+      ',"findings":[' + ($rowJson -join ',') + ']}'
+
     $tmp = "$($script:findingsJsonPath).tmp"
     [System.IO.File]::WriteAllText($tmp, $json, $utf8)
     [System.IO.File]::Copy($tmp, $script:findingsJsonPath, $true)
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     $script:lastFindingsJsonWrite = Get-Date
-  } catch {}
+  } catch {
+    Write-QuietLog "Save-FindingsJson failed: $($_.Exception.Message)"
+    if ($script:GuiMode) {
+      Write-Output ("LOG|warn|Could not save findings.json: {0}" -f $_.Exception.Message)
+    }
+  }
 }
 
 function Save-ProgressHtml {
@@ -2587,6 +2614,7 @@ foreach ($eco in $ecoList) {
 # =============================================================================
 if (-not $SkipCache) {
   Show-LiveProgress 75 'Phase 4/4: Checking caches' 'Looking for npm / Yarn / NuGet / pip caches...'
+  if ($script:GuiMode) { Write-Output 'ECOSTATUS||0|0' }
 
   $npmCacheRoots = @(Get-NpmCacheRoots)
   $cacheTargets = New-Object System.Collections.Generic.List[object]
@@ -2707,6 +2735,7 @@ Flush-OsvQueue
 # REPORT + NOTIFY  (dangerous findings only, grouped by project)
 # =============================================================================
 Show-LiveProgress 95 'Finishing' 'Writing report and notifying you...'
+if ($script:GuiMode) { Write-Output 'ECOSTATUS||0|0' }
 Write-Progress -Activity 'Vulnerable library scan' -Completed
 
 $elapsed = (Get-Date) - $start

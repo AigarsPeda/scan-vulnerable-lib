@@ -59,7 +59,7 @@ export function ProjectDropdown(props: ProjectDropdownProps) {
   }, [open])
 
   return (
-    <div className={`project-dropdown${props.disabled ? ' disabled' : ''}`} ref={rootRef}>
+    <div className={`project-dropdown${props.disabled ? ' disabled' : ''}${open ? ' is-open' : ''}`} ref={rootRef}>
       <span className="project-filter-label">Project</span>
       <button
         type="button"

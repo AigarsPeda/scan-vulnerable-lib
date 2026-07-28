@@ -44,9 +44,13 @@ export function ProgressView(props: ProgressViewProps) {
   const phaseStep = parsePhaseStep(props.phase)
   const itemProgress = parseItemProgress(props.detail)
   const showEco =
-    Boolean(props.ecoLabel) && props.ecoTotal > 0 && (active || props.ecoCurrent > 0)
+    Boolean(props.ecoLabel) &&
+    props.ecoTotal > 0 &&
+    active &&
+    /Auditing/i.test(props.phase)
 
   const detailText = itemProgress?.label || props.detail
+  const reportReady = /^DONE$/i.test(props.phase)
 
   return (
     <section className="view">
@@ -55,6 +59,11 @@ export function ProgressView(props: ProgressViewProps) {
           <div className="progress-copy">
             <h2>{props.phase}</h2>
             <p className="detail">{detailText || ' '}</p>
+            {reportReady && (
+              <p className="report-ready-hint">
+                Report is ready — open the <strong>Report</strong> tab to browse and export findings.
+              </p>
+            )}
             <div className="progress-meta">
               {phaseStep && (
                 <span>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ExportFormat, ReportFinding, ScanState } from '../shared/types'
+import { ExportDropdown } from './ExportDropdown'
 import { ProjectDropdown } from './ProjectDropdown'
 
 interface ReportViewProps {
@@ -11,16 +12,6 @@ interface ReportViewProps {
   onExport: (format: ExportFormat) => void
   onOpenPath: (path: string) => void
   onCopyPath: (path: string) => void
-}
-
-const EXPORTS: ExportFormat[] = ['json', 'txt', 'csv', 'md', 'html']
-
-const LABELS: Record<ExportFormat, string> = {
-  json: 'JSON',
-  txt: 'TXT',
-  csv: 'CSV',
-  md: 'Markdown',
-  html: 'HTML',
 }
 
 type KindFilter = 'all' | 'project' | 'cache'
@@ -142,6 +133,10 @@ export function ReportView(props: ReportViewProps) {
   const live = props.scanState === 'running' || props.scanState === 'paused'
   const canExport =
     (props.findings.length > 0 || props.findingCount > 0) && props.scanState !== 'running'
+  const exportDisabledReason =
+    props.scanState === 'running'
+      ? 'Wait until the scan is paused or stopped'
+      : 'Nothing to export yet'
 
   return (
     <section className="view">
@@ -154,29 +149,11 @@ export function ReportView(props: ReportViewProps) {
               : 'Export a copy when you need a file.'}
           </p>
         </div>
-        <div className="export-group" role="group" aria-label="Export report">
-          <h2 className="export-label">Export</h2>
-          <div className="export-buttons">
-            {EXPORTS.map((format) => (
-              <button
-                key={format}
-                type="button"
-                className="btn ghost small"
-                disabled={!canExport}
-                title={
-                  canExport
-                    ? `Export as ${LABELS[format]}`
-                    : props.scanState === 'running'
-                      ? 'Wait until the scan is paused or stopped'
-                      : 'Nothing to export yet'
-                }
-                onClick={() => props.onExport(format)}
-              >
-                {LABELS[format]}
-              </button>
-            ))}
-          </div>
-        </div>
+        <ExportDropdown
+          disabled={!canExport}
+          disabledReason={exportDisabledReason}
+          onExport={props.onExport}
+        />
       </div>
 
       <div className="report-native">

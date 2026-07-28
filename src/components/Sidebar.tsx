@@ -6,6 +6,7 @@ interface SidebarProps {
   scanState: ScanState
   statusLabel: string
   statusTone: string
+  reportReady?: boolean
   tab: 'scan' | 'report'
   onSelectTab: (tab: 'scan' | 'report') => void
   optionsLocked: boolean
@@ -76,6 +77,9 @@ export function Sidebar(props: SidebarProps) {
               />
             )}
             <span className="tab-label">{label}</span>
+            {id === 'report' && props.reportReady && (
+              <span className="tab-ready-dot" title="Report is ready" />
+            )}
           </button>
         ))}
       </nav>

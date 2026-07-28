@@ -24,6 +24,7 @@ export function useScan() {
   const [scanState, setScanState] = useState<ScanState>('idle')
   const [statusLabel, setStatusLabel] = useState('Idle')
   const [statusTone, setStatusTone] = useState('')
+  const [reportBadgeVisible, setReportBadgeVisible] = useState(false)
   const [phase, setPhase] = useState('Ready')
   const [detail, setDetail] = useState('Configure options and start a scan.')
   const [percent, setPercent] = useState(0)
@@ -44,6 +45,8 @@ export function useScan() {
 
   const scanStateRef = useRef(scanState)
   scanStateRef.current = scanState
+  const tabRef = useRef(tab)
+  tabRef.current = tab
   const reportFindingsRef = useRef<ReportFinding[]>([])
   reportFindingsRef.current = reportFindings
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -108,25 +111,39 @@ export function useScan() {
   const reloadFindings = useCallback(async () => {
     try {
       const res = await window.scannerApi.getFindings()
-      if (!res.ok || !res.findings) return
-      // Don't wipe live rows with an empty/partial file read mid-scan
-      if (
-        res.findings.length === 0 &&
-        reportFindingsRef.current.length > 0 &&
-        scanStateRef.current !== 'idle'
-      ) {
-        return
-      }
-      if (res.findings.length === 0 && reportFindingsRef.current.length === 0) {
+      if (!res.ok || !res.findings) return false
+
+      // Never wipe in-memory/live findings with an empty or unreadable disk read.
+      // This was clearing the Report when the scan finished (state → idle, then reload).
+      if (res.findings.length === 0) {
+        if (reportFindingsRef.current.length > 0) return false
         setFindingCount((c) => (typeof res.count === 'number' && res.count > c ? res.count : c))
-        return
+        return true
       }
+
       setReportFindings(res.findings)
       setFindingCount((c) => Math.max(c, res.count ?? res.findings!.length))
+      return true
     } catch {
-      // ignore
+      return false
     }
   }, [])
+
+  const scheduleReloadFindings = useCallback(() => {
+    if (reloadTimer.current) return
+    reloadTimer.current = setTimeout(() => {
+      reloadTimer.current = null
+      void reloadFindings()
+    }, 500)
+  }, [reloadFindings])
+
+  const reloadFindingsWithRetry = useCallback(async () => {
+    if (await reloadFindings()) return
+    await new Promise((r) => setTimeout(r, 350))
+    if (await reloadFindings()) return
+    await new Promise((r) => setTimeout(r, 700))
+    await reloadFindings()
+  }, [reloadFindings])
 
   const appendLiveReportFinding = useCallback((payload: ScanFinding) => {
     const raw = String(payload.package || 'unknown package')
@@ -168,14 +185,6 @@ export function useScan() {
     })
   }, [])
 
-  const scheduleReloadFindings = useCallback(() => {
-    if (reloadTimer.current) return
-    reloadTimer.current = setTimeout(() => {
-      reloadTimer.current = null
-      void reloadFindings()
-    }, 500)
-  }, [reloadFindings])
-
   const markActive = useCallback((paused = false) => {
     if (paused) {
       pauseRunSegment()
@@ -211,10 +220,25 @@ export function useScan() {
       if (typeof payload.findingCount === 'number') {
         setFindingCount((c) => (payload.findingCount! > c ? payload.findingCount! : c))
       }
-      if (typeof payload.eco === 'string' && payload.eco) {
-        setEcoLabel(payload.eco)
-        if (typeof payload.ecoCurrent === 'number') setEcoCurrent(payload.ecoCurrent)
-        if (typeof payload.ecoTotal === 'number') setEcoTotal(payload.ecoTotal)
+
+      // Eco strip is for project audits only — clear when caches/finish start or ECOSTATUS resets
+      const phaseText = String(payload.phase || '')
+      if (
+        /Phase\s*4|Checking |Finishing|DONE|STOPPED|FAILED|Writing report/i.test(phaseText)
+      ) {
+        setEcoLabel('')
+        setEcoCurrent(0)
+        setEcoTotal(0)
+      } else if (typeof payload.eco === 'string') {
+        if (!payload.eco || (Number(payload.ecoTotal) === 0 && Number(payload.ecoCurrent) === 0)) {
+          setEcoLabel('')
+          setEcoCurrent(0)
+          setEcoTotal(0)
+        } else {
+          setEcoLabel(payload.eco)
+          if (typeof payload.ecoCurrent === 'number') setEcoCurrent(payload.ecoCurrent)
+          if (typeof payload.ecoTotal === 'number') setEcoTotal(payload.ecoTotal)
+        }
       }
 
       if (!live) return
@@ -257,51 +281,54 @@ export function useScan() {
         setScriptMissing(!info.scriptExists)
         if (!info.scriptExists) addEvent('error', 'Scanner script missing from app package.')
 
-        if (runtime.progress) applyProgress(runtime.progress as ScanProgress, { live: false })
-        await reloadFindings()
-
-        if (runtime.recentFindings?.length && findings.length === 0) {
-          setFindings(
-            runtime.recentFindings.map((f) => ({
-              id: nextFindingId++,
-              severity: String(f.severity || 'unknown').toLowerCase(),
-              package: f.package || 'unknown package',
-              ecosystem: f.ecosystem || '',
-              title: f.title || '',
-              folder: f.folder || '',
-              hasFix: Boolean(f.hasFix),
-            }))
-          )
-        }
-
-        if (runtime.recentLogs.length) {
-          setEvents(
-            runtime.recentLogs.map((log) => ({
-              id: nextEventId++,
-              type: log.type || 'info',
-              text: log.text || '',
-              time: new Date().toLocaleTimeString(),
-            }))
-          )
-        }
-
         if (runtime.running) {
+          // Reconnect to a scan that is still running
+          if (runtime.progress) applyProgress(runtime.progress as ScanProgress, { live: false })
+          await reloadFindings()
+
+          if (runtime.recentFindings?.length) {
+            setFindings(
+              runtime.recentFindings.map((f) => ({
+                id: nextFindingId++,
+                severity: String(f.severity || 'unknown').toLowerCase(),
+                package: f.package || 'unknown package',
+                ecosystem: f.ecosystem || '',
+                title: f.title || '',
+                folder: f.folder || '',
+                hasFix: Boolean(f.hasFix),
+              }))
+            )
+          }
+
+          if (runtime.recentLogs.length) {
+            setEvents(
+              runtime.recentLogs.map((log) => ({
+                id: nextEventId++,
+                type: log.type || 'info',
+                text: log.text || '',
+                time: new Date().toLocaleTimeString(),
+              }))
+            )
+          }
+
           markActive(runtime.paused)
           addEvent('meta', 'Reconnected to active scan')
         } else {
+          // Fresh Progress UI — do not restore old DONE/100% from a previous run
           setScanState('idle')
-          const phaseText = String((runtime.progress as ScanProgress | null)?.phase || '')
-          if (isTerminalPhase(phaseText) && phaseText.toUpperCase() === 'DONE') {
-            setStatusLabel('Finished')
-            setStatusTone('done')
-          } else if (runtime.findingCount > 0 || runtime.reportUrl) {
-            setStatusLabel('Idle')
-            setStatusTone('')
-            addEvent('meta', 'Loaded previous scan results — press Start to run again')
-          } else {
-            setStatusLabel('Idle')
-            setStatusTone('')
-          }
+          setStatusLabel('Idle')
+          setStatusTone('')
+          setPercent(0)
+          setPhase('Ready')
+          setDetail('Configure options and start a scan.')
+          setFindings([])
+          setFindingCount(0)
+          setEcoLabel('')
+          setEcoCurrent(0)
+          setEcoTotal(0)
+          // Quietly load prior report data for the Report tab only
+          await reloadFindings()
+          setFindingCount(0)
         }
       } catch (err) {
         if (!cancelled) addEvent('error', String(err))
@@ -348,7 +375,7 @@ export function useScan() {
         }
 
         setScanState('idle')
-        void reloadFindings()
+        void reloadFindingsWithRetry()
 
         if (payload.stopped) {
           pauseRunSegment()
@@ -371,13 +398,26 @@ export function useScan() {
 
         if (payload.reportExists || payload.exitCode === 0) {
           pauseRunSegment()
-          setStatusLabel('Finished')
+          setEcoLabel('')
+          setEcoCurrent(0)
+          setEcoTotal(0)
+          const ready = reportFindingsRef.current.length > 0
+          setStatusLabel(ready ? 'Report ready' : 'Finished')
           setStatusTone('done')
           setPercent(100)
           setPhase('DONE')
-          setDetail('Scan finished')
-          addEvent('done', 'Scan finished')
-          setTab('report')
+          setDetail(
+            ready
+              ? 'Report is ready to view and export'
+              : 'Scan finished — no findings'
+          )
+          addEvent('done', 'Scan finished — report ready')
+          // Stay on the current tab; only nudge with a badge if user is not already on Report
+          if (tabRef.current === 'report') {
+            setReportBadgeVisible(false)
+          } else {
+            setReportBadgeVisible(true)
+          }
         } else {
           pauseRunSegment()
           setStatusLabel(`Exit ${payload.exitCode}`)
@@ -391,12 +431,23 @@ export function useScan() {
       unsubs.forEach((u) => u())
       if (reloadTimer.current) clearTimeout(reloadTimer.current)
     }
-  }, [addEvent, appendLiveReportFinding, applyProgress, markActive, pauseRunSegment, reloadFindings, scheduleReloadFindings])
+  }, [
+    addEvent,
+    appendLiveReportFinding,
+    applyProgress,
+    markActive,
+    pauseRunSegment,
+    reloadFindingsWithRetry,
+    scheduleReloadFindings,
+  ])
 
   const selectTab = useCallback(
     async (name: TabName) => {
       setTab(name)
-      if (name === 'report') await reloadFindings()
+      if (name === 'report') {
+        setReportBadgeVisible(false)
+        await reloadFindings()
+      }
     },
     [reloadFindings]
   )
@@ -406,6 +457,7 @@ export function useScan() {
     resetTiming()
     beginRunSegment()
     markActive(false)
+    setReportBadgeVisible(false)
     setPercent(1)
     setPhase('Starting')
     setDetail('Launching scanner…')
@@ -573,6 +625,7 @@ export function useScan() {
     scanState,
     statusLabel,
     statusTone,
+    reportReady: reportBadgeVisible,
     phase,
     detail,
     percent,

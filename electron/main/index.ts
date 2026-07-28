@@ -233,8 +233,15 @@ ipcMain.handle('get-findings', async () => {
     if (!fs.existsSync(p)) {
       return { ok: true, count: 0, findings: [], generated: '', mtimeMs: 0 }
     }
-    const data = readFindingsData()
-    const rows = Array.isArray(data?.findings) ? data!.findings! : []
+    let data: FindingsFile
+    try {
+      data = JSON.parse(fs.readFileSync(p, 'utf8')) as FindingsFile
+    } catch {
+      // Don't treat a mid-write / corrupt file as an empty report
+      return { ok: false, error: 'Findings file is not readable yet.' }
+    }
+    const raw = data?.findings
+    const rows: FindingRow[] = Array.isArray(raw) ? raw : raw ? [raw as FindingRow] : []
     const mtimeMs = fs.statSync(p).mtimeMs
     lastFindingsMtime = mtimeMs
     return {

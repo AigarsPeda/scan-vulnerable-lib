@@ -24,6 +24,7 @@ export default function App() {
         scanState={scan.scanState}
         statusLabel={scan.statusLabel}
         statusTone={scan.statusTone}
+        reportReady={scan.reportReady}
         tab={scan.tab}
         onSelectTab={scan.selectTab}
         optionsLocked={scan.optionsLocked}
