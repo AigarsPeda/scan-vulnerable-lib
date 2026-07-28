@@ -453,9 +453,10 @@ export function ReportView(props: ReportViewProps) {
                         </code>
                       </div>
                       {f.title && <div className="issue-title">{f.title}</div>}
-                      {f.fix && (
+                      {(f.fix || f.hasFix) && (
                         <div className="issue-fix">
-                          <strong>How to solve:</strong> {f.fix}
+                          <strong>How to solve:</strong>{' '}
+                          {f.fix || 'Upgrade to a patched version (see advisory)'}
                         </div>
                       )}
                       {f.advisory && (

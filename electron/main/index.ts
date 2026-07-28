@@ -780,6 +780,7 @@ function handleStdoutLine(line: string): void {
       hasFix: parts[6] === '1',
       count: Number(parts[7] || 0),
       isCache: parts[8] === '1',
+      fix: parts[9] || '',
     })
     return
   }

@@ -75,6 +75,7 @@ export class FindingsStore {
           finding.HasFix ? '1' : '0',
           String(this.items.length),
           finding.IsCache ? '1' : '0',
+          finding.Fix || '',
         ].join('|')
       )
     }

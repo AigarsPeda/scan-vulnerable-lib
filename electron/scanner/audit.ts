@@ -220,6 +220,21 @@ function isNpmAuditJson(stdout: string): boolean {
   }
 }
 
+function formatNpmFixAvailable(fixAvailable: unknown): string {
+  if (!fixAvailable) return ''
+  if (fixAvailable === true) return 'Upgrade to a patched version (npm audit)'
+  if (typeof fixAvailable === 'string') return fixAvailable
+  if (typeof fixAvailable === 'object') {
+    const o = fixAvailable as { name?: string; version?: string; isSemVerMajor?: boolean }
+    if (o.name && o.version) {
+      const major = o.isSemVerMajor ? ' (major)' : ''
+      return `Upgrade to ${o.name}@${o.version}${major}`
+    }
+    if (o.version) return `Upgrade to ${o.version}`
+  }
+  return 'Upgrade to a patched version (npm audit)'
+}
+
 function parseNpmAudit(stdout: string, dir: string, findings: FindingsStore, source: string): void {
   let audit: Record<string, unknown>
   try {
@@ -257,7 +272,7 @@ function parseNpmAudit(stdout: string, dir: string, findings: FindingsStore, sou
         Title: title,
         Advisory: advParts.join(', '),
         Path: dir,
-        Fix: v.fixAvailable ? String(v.fixAvailable) : '',
+        Fix: formatNpmFixAvailable(v.fixAvailable),
         HasFix: Boolean(v.fixAvailable),
       })
     }

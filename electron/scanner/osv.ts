@@ -9,6 +9,10 @@ type OsvVuln = {
   related?: string[]
   severity?: { type?: string; score?: string }[] | unknown
   database_specific?: { severity?: string }
+  affected?: {
+    package?: { name?: string; ecosystem?: string }
+    ranges?: { type?: string; events?: { introduced?: string; fixed?: string; last_affected?: string }[] }[]
+  }[]
 }
 
 const OSV_QUERY = 'https://api.osv.dev/v1/query'
@@ -85,6 +89,7 @@ export class OsvClient {
     const ids = vulns
       .flatMap((v) => [v.id, ...(v.aliases || []), ...(v.related || [])])
       .filter(Boolean) as string[]
+    const fixed = collectOsvFixedVersions(vulns, item.package)
     findings.add({
       Ecosystem: item.ecoLabel,
       Source: item.source,
@@ -94,7 +99,10 @@ export class OsvClient {
       Title: title,
       Advisory: [...new Set(ids)].join(', '),
       Path: item.path,
-      Fix: 'Upgrade to a patched version (see advisory)',
+      Fix: fixed.length
+        ? `Upgrade to ${fixed.join(' / ')}`
+        : 'Upgrade to a patched version (see advisory)',
+      HasFix: true,
     })
   }
 
@@ -243,4 +251,23 @@ function severityFromCvssList(
   if (bestScore >= 7) return 'high'
   if (bestScore >= 4) return 'medium'
   return 'low'
+}
+
+/** Pull fixed versions from OSV affected ranges for this package. */
+function collectOsvFixedVersions(vulns: OsvVuln[], packageName: string): string[] {
+  const fixed = new Set<string>()
+  const pkgLower = packageName.toLowerCase()
+  for (const v of vulns) {
+    for (const aff of v.affected || []) {
+      const name = String(aff.package?.name || '').toLowerCase()
+      if (name && name !== pkgLower) continue
+      for (const range of aff.ranges || []) {
+        for (const ev of range.events || []) {
+          const f = String(ev.fixed || '').trim()
+          if (f) fixed.add(f)
+        }
+      }
+    }
+  }
+  return [...fixed].sort()
 }

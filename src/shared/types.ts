@@ -61,6 +61,7 @@ export interface ScanFinding {
   title?: string
   folder?: string
   hasFix?: boolean
+  fix?: string
   count?: number
   isCache?: boolean
 }
