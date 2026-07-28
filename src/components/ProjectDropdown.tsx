@@ -38,7 +38,9 @@ export function ProjectDropdown(props: ProjectDropdownProps) {
     }
     return {
       label: match.name,
-      meta: `${match.isCache ? 'Cache' : 'Project'} · ${match.count} finding${match.count === 1 ? '' : 's'}`,
+      meta: match.isCache
+        ? `Cache · ${match.count} finding${match.count === 1 ? '' : 's'}`
+        : `${match.count} finding${match.count === 1 ? '' : 's'}`,
     }
   }, [props.options, props.value])
 
@@ -133,7 +135,9 @@ export function ProjectDropdown(props: ProjectDropdownProps) {
               >
                 <span className="project-option-title">{p.name}</span>
                 <span className="project-option-meta">
-                  {p.isCache ? 'Cache' : 'Project'} · {p.count}
+                  {p.isCache
+                    ? `Cache · ${p.count}`
+                    : `${p.count} finding${p.count === 1 ? '' : 's'}`}
                 </span>
               </button>
             ))}

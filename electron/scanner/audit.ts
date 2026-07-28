@@ -98,42 +98,99 @@ export async function auditAll(
 }
 
 async function auditNpm(dir: string, findings: FindingsStore, osv: OsvClient): Promise<void> {
+  const lockPath = path.join(dir, 'package-lock.json')
+  const hasLock = fs.existsSync(lockPath)
+
+  // Lockfile → OSV is much faster than `npm audit` (registry round-trips often
+  // stall 1–5 minutes per project on Windows). Prefer it whenever a lock exists.
+  if (hasLock) {
+    enqueueNpmPackagesForOsv(dir, osv)
+    return
+  }
+
   const npm = resolveTool('npm')
   const yarn = resolveTool('yarn')
   const hasYarnLock = fs.existsSync(path.join(dir, 'yarn.lock'))
-  let nativeOk = false
 
   if (npm) {
-    const res = await runNative(npm, ['audit', '--json'], { cwd: dir })
-    if (isNpmAuditJson(res.stdout)) {
-      nativeOk = true
+    const res = await runNative(npm, ['audit', '--json'], {
+      cwd: dir,
+      timeoutMs: 30_000,
+      env: {
+        npm_config_fetch_timeout: '10000',
+        npm_config_fetch_retries: '0',
+      },
+    })
+    if (!res.timedOut && isNpmAuditJson(res.stdout)) {
       parseNpmAudit(res.stdout, dir, findings, 'npm-audit')
+      return
     }
   } else if (yarn && hasYarnLock) {
-    const res = await runNative(yarn, ['audit', '--json'], { cwd: dir })
-    if (res.stdout.trim()) {
-      nativeOk = true
+    const res = await runNative(yarn, ['audit', '--json'], {
+      cwd: dir,
+      timeoutMs: 30_000,
+    })
+    if (!res.timedOut && res.stdout.trim()) {
       parseYarnAudit(res.stdout, dir, findings)
+      return
     }
   }
 
-  // Only fall back when npm/yarn did not return a usable audit (common on Windows
-  // when .cmd spawning fails). Do not OSV-flood after a successful empty audit.
-  if (!nativeOk) {
-    const pkgPath = path.join(dir, 'package.json')
-    const pkg = readJson<{
-      dependencies?: Record<string, string>
-      devDependencies?: Record<string, string>
-    }>(pkgPath)
-    if (pkg) {
-      for (const [name, ver] of Object.entries({
-        ...(pkg.dependencies || {}),
-        ...(pkg.devDependencies || {}),
-      })) {
-        const cleaned = String(ver).replace(/^[~^>=<\s]+/, '')
-        if (/^\d/.test(cleaned)) osv.enqueue('npm', 'npm', name, cleaned, dir, 'package.json')
+  enqueueNpmPackagesForOsv(dir, osv)
+}
+
+/** Prefer lockfile versions (exact) over package.json ranges for OSV queries. */
+function enqueueNpmPackagesForOsv(dir: string, osv: OsvClient): void {
+  const lockPath = path.join(dir, 'package-lock.json')
+  const lock = readJson<{
+    packages?: Record<string, { version?: string; name?: string }>
+    dependencies?: Record<string, { version?: string; dependencies?: unknown }>
+  }>(lockPath)
+
+  if (lock?.packages) {
+    for (const [key, meta] of Object.entries(lock.packages)) {
+      if (!key || key === '') continue
+      const version = meta?.version
+      if (!version) continue
+      const name =
+        meta.name ||
+        (key.includes('node_modules/')
+          ? key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length)
+          : key)
+      if (!name || name.startsWith('.')) continue
+      osv.enqueue('npm', 'npm', name, version, dir, 'package-lock.json')
+    }
+    return
+  }
+
+  if (lock?.dependencies) {
+    const walk = (deps: Record<string, { version?: string; dependencies?: unknown }>, prefix = '') => {
+      for (const [name, meta] of Object.entries(deps)) {
+        const version = String(meta?.version || '').replace(/^[^0-9]*/, '')
+        if (version && /^\d/.test(version)) {
+          osv.enqueue('npm', 'npm', name, version, dir, 'package-lock.json')
+        }
+        if (meta?.dependencies && typeof meta.dependencies === 'object') {
+          walk(meta.dependencies as Record<string, { version?: string; dependencies?: unknown }>, prefix)
+        }
       }
     }
+    walk(lock.dependencies)
+    return
+  }
+
+  const pkgPath = path.join(dir, 'package.json')
+  const pkg = readJson<{
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+  }>(pkgPath)
+  if (!pkg) return
+  for (const [name, ver] of Object.entries({
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {}),
+  })) {
+    const cleaned = String(ver).replace(/^[~^>=<\s]+/, '')
+    if (/^\d/.test(cleaned)) osv.enqueue('npm', 'npm', name, cleaned, dir, 'package.json')
   }
 }
 
