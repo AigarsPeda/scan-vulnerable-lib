@@ -1,10 +1,12 @@
 const statusPill = document.getElementById('status-pill');
-const platformLine = document.getElementById('platform-line');
 const phaseText = document.getElementById('phase-text');
 const detailText = document.getElementById('detail-text');
 const pctText = document.getElementById('pct-text');
 const barFill = document.getElementById('bar-fill');
 const eventsEl = document.getElementById('events');
+const liveFindingsEl = document.getElementById('live-findings');
+const findingsCountEl = document.getElementById('findings-count');
+const findingsEmptyEl = document.getElementById('findings-empty');
 const reportFrame = document.getElementById('report-frame');
 const reportEmpty = document.getElementById('report-empty');
 
@@ -18,6 +20,7 @@ const btnRefreshReport = document.getElementById('btn-refresh-report');
 let lastReportMtime = 0;
 /** @type {'idle' | 'running' | 'paused'} */
 let scanState = 'idle';
+let findingCount = 0;
 
 function setTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
@@ -31,6 +34,49 @@ function addEvent(type, text) {
   li.textContent = `${time}  ${text}`;
   eventsEl.prepend(li);
   while (eventsEl.children.length > 200) eventsEl.removeChild(eventsEl.lastChild);
+}
+
+function clearFindings() {
+  findingCount = 0;
+  liveFindingsEl.innerHTML = '';
+  findingsCountEl.textContent = '0';
+  findingsEmptyEl.classList.remove('hidden');
+}
+
+function addFinding(payload = {}) {
+  const sev = String(payload.severity || 'unknown').toLowerCase();
+  const pkg = payload.package || 'unknown package';
+  const title = payload.title || '';
+  const folder = payload.folder || '';
+  const eco = payload.ecosystem || '';
+
+  const li = document.createElement('li');
+  const sevEl = document.createElement('span');
+  sevEl.className = `sev ${sev}`;
+  sevEl.textContent = sev;
+
+  const body = document.createElement('div');
+  const pkgEl = document.createElement('div');
+  pkgEl.className = 'pkg';
+  pkgEl.textContent = pkg + (eco ? ` (${eco})` : '');
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = [title, folder].filter(Boolean).join(' · ');
+
+  body.appendChild(pkgEl);
+  if (meta.textContent) body.appendChild(meta);
+  li.appendChild(sevEl);
+  li.appendChild(body);
+  liveFindingsEl.prepend(li);
+
+  while (liveFindingsEl.children.length > 300) {
+    liveFindingsEl.removeChild(liveFindingsEl.lastChild);
+  }
+
+  findingCount = Number(payload.count) > 0 ? Number(payload.count) : findingCount + 1;
+  findingsCountEl.textContent = String(findingCount);
+  findingsEmptyEl.classList.add('hidden');
 }
 
 function setProgress({ percent = 0, phase = '', detail = '' } = {}) {
@@ -87,7 +133,6 @@ async function loadReportIfAny() {
 
 async function refreshInfo() {
   const info = await window.scannerApi.getAppInfo();
-  platformLine.textContent = `${info.platformLabel} · data stored inside the app`;
   if (!info.scriptExists) addEvent('error', 'Scanner script missing from app package.');
   if (info.reportUrl) showReport(info.reportUrl);
   return info;
@@ -95,6 +140,7 @@ async function refreshInfo() {
 
 async function startScan() {
   setTab('scan');
+  clearFindings();
   setControls('running');
   setProgress({ percent: 1, phase: 'Starting', detail: 'Launching scanner…' });
   addEvent('meta', 'Scan started');
@@ -183,11 +229,18 @@ window.scannerApi.onScanLog((payload) => {
 
 window.scannerApi.onScanProgress((payload) => {
   setProgress(payload || {});
+  if (typeof payload?.findingCount === 'number' && payload.findingCount > findingCount) {
+    findingsCountEl.textContent = String(payload.findingCount);
+  }
   if (payload?.paused === true && scanState === 'running') {
     setControls('paused');
   } else if (payload?.paused === false && scanState === 'paused' && payload?.phase !== 'Paused') {
     setControls('running');
   }
+});
+
+window.scannerApi.onScanFinding((payload) => {
+  addFinding(payload || {});
 });
 
 window.scannerApi.onReportUpdated((payload) => {

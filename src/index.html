@@ -11,9 +11,7 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <p class="eyebrow">Win + Mac</p>
         <h1>Vuln Scanner</h1>
-        <p class="sub" id="platform-line">Detecting platform…</p>
       </div>
 
       <div class="status-pill" id="status-pill">Idle</div>
@@ -61,6 +59,14 @@
           <div class="bar" aria-hidden="true">
             <div class="bar-fill" id="bar-fill"></div>
           </div>
+        </div>
+
+        <div class="findings-card">
+          <div class="events-head">
+            <h2>Found so far <span class="findings-count" id="findings-count">0</span></h2>
+          </div>
+          <ul id="live-findings" class="live-findings"></ul>
+          <p class="findings-empty" id="findings-empty">No issues found yet.</p>
         </div>
 
         <div class="events-card">

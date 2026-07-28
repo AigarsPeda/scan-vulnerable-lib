@@ -256,6 +256,19 @@ function handleStdoutLine(line) {
     send('scan-progress', { percent, phase, detail, paused });
     return;
   }
+  if (text.startsWith('FINDING|')) {
+    const parts = text.split('|');
+    send('scan-finding', {
+      severity: parts[1] || 'unknown',
+      package: parts[2] || '',
+      ecosystem: parts[3] || '',
+      title: parts[4] || '',
+      folder: parts[5] || '',
+      hasFix: parts[6] === '1',
+      count: Number(parts[7] || 0),
+    });
+    return;
+  }
   if (text.startsWith('LOG|')) {
     const parts = text.split('|');
     const kind = parts[1] || 'info';

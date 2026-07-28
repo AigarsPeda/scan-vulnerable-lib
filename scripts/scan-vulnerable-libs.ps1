@@ -157,12 +157,13 @@ function Initialize-ProgressLine {
 function Write-GuiProgressFile {
   try {
     $obj = [ordered]@{
-      percent = [int]$script:percent
-      phase   = [string]$script:phase
-      detail  = [string]$script:detail
-      report  = [string]$outHtml
-      paused  = [bool]$script:GuiPaused
-      updated = (Get-Date).ToString('o')
+      percent      = [int]$script:percent
+      phase        = [string]$script:phase
+      detail       = [string]$script:detail
+      report       = [string]$outHtml
+      paused       = [bool]$script:GuiPaused
+      findingCount = [int]$findings.Count
+      updated      = (Get-Date).ToString('o')
     }
     $json = ($obj | ConvertTo-Json -Compress)
     $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -1003,6 +1004,17 @@ function Add-Finding {
     -Kind 'finding' -Severity $sev -Folder $folder `
     -Fix $fixText -HasFix $hasFix -Advisory $advisoryText -Title $titleClean -Package $Package `
     -IsCache:$isCache
+
+  if ($script:GuiMode) {
+    $sSev = ($sev -replace '[\r\n\|]', ' ').Trim()
+    $sPkg = (("$Package@$Version") -replace '[\r\n\|]', ' ').Trim()
+    $sEco = ($Ecosystem -replace '[\r\n\|]', ' ').Trim()
+    $sTitle = ($titleClean -replace '[\r\n\|]', ' ').Trim()
+    $sFolder = ($folder -replace '[\r\n\|]', ' ').Trim()
+    $sFix = if ($hasFix) { '1' } else { '0' }
+    Write-Output ("FINDING|{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f $sSev, $sPkg, $sEco, $sTitle, $sFolder, $sFix, $findings.Count)
+    Write-GuiProgressFile
+  }
 }
 
 function Show-UserNotification([string]$title, [string]$text) {

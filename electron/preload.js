@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('scannerApi', {
     ipcRenderer.on('scan-progress', listener);
     return () => ipcRenderer.removeListener('scan-progress', listener);
   },
+  onScanFinding: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('scan-finding', listener);
+    return () => ipcRenderer.removeListener('scan-finding', listener);
+  },
   onReportUpdated: (cb) => {
     const listener = (_e, payload) => cb(payload);
     ipcRenderer.on('report-updated', listener);
