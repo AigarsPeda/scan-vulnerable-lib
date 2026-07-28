@@ -1,6 +1,6 @@
 # Vulnerable Library Scanner (Electron)
 
-One GUI for **Windows and macOS**. It runs the shared PowerShell scanner and opens the HTML report on your Desktop.
+One GUI for **Windows and macOS**. React + TypeScript UI (electron-vite) that runs the shared PowerShell scanner.
 
 ## Requirements
 
@@ -18,15 +18,18 @@ npm install
 ## Run
 
 ```bash
-npm start
+npm run dev      # development (hot reload)
+npm start        # preview production build
+npm run build    # compile main/preload/renderer
 ```
 
 ## What it does
 
 - Runs the bundled scanner: `scripts/scan-vulnerable-libs.ps1`
-- Shows a **progress bar** and status inside the app (no terminal needed)
-- Writes the HTML report into the **app data folder** (not Desktop)
-- Displays the **report inside the app** (Report tab)
+- Shows live **progress**, **findings**, and status inside the app
+- Start / Pause / Resume / Stop controls
+- Writes working report data under the **app data folder**
+- **Report** tab (HTML viewer) + **export** JSON / TXT / CSV / Markdown / HTML
 
 ## Options in the UI
 
@@ -42,14 +45,16 @@ npm start
 
 ```
 scan-vulnerable-lib/
-  electron/          # Electron main + preload
-  src/               # UI (HTML/CSS/JS)
-  scripts/           # Bundled scanner (.ps1) for Win + Mac
+  electron/main/       # Electron main (TypeScript)
+  electron/preload/    # Preload bridge (TypeScript)
+  src/                 # React + TypeScript UI
+  scripts/             # Bundled scanner (.ps1) for Win + Mac
+  assets/              # App icon
   package.json
 ```
 
 ## Notes
 
 - On macOS install PowerShell 7 (`pwsh`) via https://aka.ms/powershell
-- Use **Open data folder** in the UI to find the generated report files
+- Use **Open data folder** in the UI to find working report files
 - Standalone script still supports Desktop output when run without `-GuiMode`

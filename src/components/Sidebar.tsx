@@ -1,0 +1,129 @@
+import type { ScanState } from '../shared/types'
+
+interface SidebarProps {
+  iconUrl: string
+  scanState: ScanState
+  statusLabel: string
+  statusTone: string
+  tab: 'scan' | 'report'
+  onSelectTab: (tab: 'scan' | 'report') => void
+  highOnly: boolean
+  skipCache: boolean
+  skipOsv: boolean
+  maxProjects: number
+  rootPath: string
+  onHighOnly: (v: boolean) => void
+  onSkipCache: (v: boolean) => void
+  onSkipOsv: (v: boolean) => void
+  onMaxProjects: (v: number) => void
+  onRootPath: (v: string) => void
+  onPrimaryClick: () => void
+  onStop: () => void
+  onPickFolder: () => void
+}
+
+export function Sidebar(props: SidebarProps) {
+  const primaryLabel =
+    props.scanState === 'running' ? 'Pause' : props.scanState === 'paused' ? 'Resume' : 'Start'
+  const primaryClass =
+    props.scanState === 'running' ? 'btn warn' : 'btn primary'
+
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <img className="brand-icon" src={props.iconUrl} alt="" width={28} height={28} />
+        <div className="brand-text">
+          <h1>Vuln Scanner</h1>
+          <p>Library security scan</p>
+        </div>
+      </div>
+
+      <div className={`status-pill ${props.statusTone}`.trim()}>{props.statusLabel}</div>
+
+      <nav className="tabs" role="tablist">
+        <button
+          type="button"
+          className={`tab${props.tab === 'scan' ? ' active' : ''}`}
+          onClick={() => props.onSelectTab('scan')}
+        >
+          Progress
+        </button>
+        <button
+          type="button"
+          className={`tab${props.tab === 'report' ? ' active' : ''}`}
+          onClick={() => props.onSelectTab('report')}
+        >
+          Report
+        </button>
+      </nav>
+
+      <section className="side-panel">
+        <h2>Options</h2>
+        <div className="options-stack">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={props.highOnly}
+              onChange={(e) => props.onHighOnly(e.target.checked)}
+            />
+            <span>High / Critical only</span>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={props.skipCache}
+              onChange={(e) => props.onSkipCache(e.target.checked)}
+            />
+            <span>Skip caches</span>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={props.skipOsv}
+              onChange={(e) => props.onSkipOsv(e.target.checked)}
+            />
+            <span>Skip OSV API</span>
+          </label>
+        </div>
+        <label className="field">
+          <span>Max projects / ecosystem</span>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={props.maxProjects}
+            onChange={(e) => props.onMaxProjects(Number(e.target.value || 80))}
+          />
+        </label>
+        <label className="field">
+          <span>Optional root folder</span>
+          <div className="path-row">
+            <input
+              type="text"
+              placeholder="Leave empty for defaults"
+              value={props.rootPath}
+              onChange={(e) => props.onRootPath(e.target.value)}
+            />
+            <button type="button" className="btn ghost icon-btn" onClick={props.onPickFolder} title="Browse">
+              …
+            </button>
+          </div>
+        </label>
+      </section>
+
+      <div className="side-actions">
+        <button type="button" className={primaryClass} onClick={props.onPrimaryClick}>
+          {primaryLabel}
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          disabled={props.scanState === 'idle'}
+          onClick={props.onStop}
+        >
+          Stop
+        </button>
+      </div>
+    </aside>
+  )
+}

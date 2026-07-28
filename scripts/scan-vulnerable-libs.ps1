@@ -102,6 +102,18 @@ if ($script:GuiMode) {
     $utf8Ctrl = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($script:controlJsonPath, '{"action":"run"}', $utf8Ctrl)
   } catch {}
+  # Start with an empty findings file so the live Report clears immediately
+  try {
+    $utf8Find = New-Object System.Text.UTF8Encoding $false
+    $emptyFindings = (@{
+      generated = (Get-Date).ToString('o')
+      platform  = [string]$script:OsLabel
+      count     = 0
+      findings  = @()
+    } | ConvertTo-Json -Depth 4)
+    [System.IO.File]::WriteAllText($script:findingsJsonPath, $emptyFindings, $utf8Find)
+    $script:lastFindingsJsonWrite = Get-Date
+  } catch {}
 }
 $script:logEntries = New-Object System.Collections.Generic.List[object]
 $script:lastHtmlFlush = [datetime]::MinValue
@@ -650,9 +662,13 @@ function Save-FindingsJson {
       count     = [int]$findings.Count
       findings  = @($findings)
     }
-    $json = ($payload | ConvertTo-Json -Depth 8)
+    $json = ($payload | ConvertTo-Json -Depth 8 -Compress)
     $utf8 = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($script:findingsJsonPath, $json, $utf8)
+    # Atomic write so the UI never reads a half-written file (was causing Report flash/empty)
+    $tmp = "$($script:findingsJsonPath).tmp"
+    [System.IO.File]::WriteAllText($tmp, $json, $utf8)
+    [System.IO.File]::Copy($tmp, $script:findingsJsonPath, $true)
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     $script:lastFindingsJsonWrite = Get-Date
   } catch {}
 }
@@ -1097,6 +1113,11 @@ function Add-Finding {
     $sFix = if ($hasFix) { '1' } else { '0' }
     Write-Output ("FINDING|{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f $sSev, $sPkg, $sEco, $sTitle, $sFolder, $sFix, $findings.Count)
     Write-GuiProgressFile
+    # Keep findings.json fresh so the React report stays live
+    $nowJson = Get-Date
+    if (-not $script:lastFindingsJsonWrite -or ($nowJson - $script:lastFindingsJsonWrite).TotalMilliseconds -ge 600) {
+      Save-FindingsJson
+    }
   }
 }
 
